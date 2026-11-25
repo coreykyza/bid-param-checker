@@ -44,6 +44,8 @@ def _cfg(*keys, default=""):
 # 优先读通用变量（LLM_*），回退到旧的 ZHIPU_*，保证老 .env 仍能跑。
 API_KEY = _cfg("LLM_API_KEY", "DEEPSEEK_API_KEY", "ZHIPU_API_KEY")
 MODEL = _cfg("LLM_MODEL", "DEEPSEEK_MODEL", "ZHIPU_MODEL", default="glm-4-flash")
+# AI 核验专家用独立模型（异构盲核，避免同一个模型复核自己）。未配置则回退到初判模型。
+VERIFY_MODEL = _cfg("LLM_VERIFY_MODEL", default="") or MODEL
 PROVIDER = _cfg("LLM_PROVIDER", default="").lower()
 
 # 按 provider 或模型名推断 base url
@@ -99,6 +101,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "key_configured": bool(API_KEY and not API_KEY.startswith("your_")),
                 "model": MODEL,
+                "verify_model": VERIFY_MODEL,
                 "provider": PROVIDER,
                 "thinking": THINKING or None,
             })
@@ -142,12 +145,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not messages:
                 self._json(400, {"error": "BAD_REQUEST", "message": "缺少 messages"})
                 return
+            # role=verify 走核验模型；默认走初判模型。模型名只在服务端 .env 配置，前端不接触。
+            use_model = VERIFY_MODEL if data.get("role") == "verify" else MODEL
         except Exception as e:
             self._json(400, {"error": "BAD_REQUEST", "message": str(e)})
             return
 
         payload = {
-            "model": MODEL,
+            "model": use_model,
             "messages": messages,
             "temperature": 0.1,
             "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
@@ -189,9 +194,9 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
 
 if __name__ == "__main__":
     configured = bool(API_KEY and not API_KEY.startswith("your_"))
-    print(f"[bid-checker proxy] provider={PROVIDER} model={MODEL} thinking={THINKING or '-'} key_configured={configured} port={PORT}")
+    print(f"[bid-checker proxy] provider={PROVIDER} model={MODEL} verify_model={VERIFY_MODEL} thinking={THINKING or '-'} key_configured={configured} port={PORT}")
     if not configured:
-        print("[bid-checker proxy] WARNING: .env 未配置 ZHIPU_API_KEY，真实核验不可用（HTML 会走演示模式）")
+        print("[bid-checker proxy] WARNING: .env 未配置 LLM_API_KEY，真实核验不可用（HTML 会走演示模式）")
     print(f"[bid-checker proxy] 打开 http://localhost:{PORT}/index.html 使用工具")
     with ReusableTCPServer(("127.0.0.1", PORT), Handler) as httpd:
         try:

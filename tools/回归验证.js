@@ -30,6 +30,7 @@ const hwMatcher = fs.readFileSync(path.join(ROOT, 'data/hw-matcher.js'), 'utf8')
 // 只取需要的纯函数，避免执行 DOM 相关代码
 const NEEDED = [
   'normText', 'splitItems', 'nums', 'numWithUnit', 'itemSame', 'scoreOverlap',
+  'isGroupHeading', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates',
   'itemSeqLabel', 'itemBody', 'detailLine', 'statLine', 'formatResult', 'isNeg'
 ];
@@ -63,6 +64,10 @@ vm.runInContext('loadHwSpecs();', sandbox);
 const promptM = mainJs.match(/const SYSTEM_PROMPT=`([\s\S]*?)`;/);
 const SYSTEM_PROMPT = promptM ? promptM[1] : '';
 if (!SYSTEM_PROMPT) throw new Error('未找到 SYSTEM_PROMPT');
+// 抽核验专家提示词（v2.5 异构盲核）
+const verifyPromptM = mainJs.match(/const VERIFY_PROMPT=`([\s\S]*?)`;/);
+const VERIFY_PROMPT = verifyPromptM ? verifyPromptM[1] : '';
+if (!VERIFY_PROMPT) throw new Error('未找到 VERIFY_PROMPT');
 
 /* ---------- 2. 读配置（与 server.py 同一套规则） ---------- */
 function readEnv() {
@@ -83,6 +88,8 @@ const cfg = (...keys) => {
 };
 const KEY = cfg('LLM_API_KEY', 'DEEPSEEK_API_KEY', 'ZHIPU_API_KEY');
 const MODEL_NAME = cfg('LLM_MODEL', 'DEEPSEEK_MODEL', 'ZHIPU_MODEL') || 'glm-4-flash';
+// 核验专家用独立模型（异构盲核），未配置则回退到初判模型
+const VERIFY_MODEL = cfg('LLM_VERIFY_MODEL') || MODEL_NAME;
 const THINKING = cfg('LLM_THINKING');
 const BASE = cfg('LLM_BASE_URL');
 const DEFAULT_URLS = {
@@ -92,7 +99,7 @@ const DEFAULT_URLS = {
 let API = BASE || (MODEL_NAME.startsWith('deepseek') ? DEFAULT_URLS.deepseek : DEFAULT_URLS.zhipu);
 if (!API.replace(/\/$/, '').endsWith('/chat/completions')) API = API.replace(/\/$/, '') + '/chat/completions';
 if (!KEY) throw new Error('.env 里没有 LLM_API_KEY / ZHIPU_API_KEY');
-console.log(`模型：${MODEL_NAME} | thinking=${THINKING || '-'} | ${API}`);
+console.log(`模型：${MODEL_NAME} | 核验模型：${VERIFY_MODEL} | thinking=${THINKING || '-'} | ${API}`);
 
 /* ---------- 3. 调模型（与前端 aiGradeBatch 等价） ---------- */
 async function grade(rows) {
@@ -123,6 +130,54 @@ async function grade(rows) {
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: JSON.stringify(payload) }
+    ]
+  };
+  if (THINKING === 'enabled' || THINKING === 'disabled') body.thinking = { type: THINKING };
+  const ctl = new AbortController();
+  const tid = setTimeout(() => ctl.abort(), 120000);
+  try {
+    const resp = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
+      body: JSON.stringify(body),
+      signal: ctl.signal
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()).slice(0, 200));
+    const data = await resp.json();
+    const content = data.choices[0].message.content;
+    const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(clean).results || [];
+  } finally { clearTimeout(tid); }
+}
+
+/* ---------- 3.5 核验专家：异构复核（带初判理由，标注仅供参考） ---------- */
+async function verify(rows) {
+  const payload = {
+    rows: rows.map(r => {
+      const all = sandbox.splitItems(r.a);
+      const use = (r.onlyItems && r.onlyItems.length)
+        ? all.filter((_, i) => r.onlyItems.includes(i))
+        : all;
+      return {
+        row: r.row,
+        待核条目: use.map((it, k) => ({
+          n: k + 1,
+          招标原文: it.text,
+          初判状态: (r.statuses && r.statuses[k]) || '',
+          初判理由: (r.notes && r.notes[k]) || ''
+        })),
+        投标响应: r.b
+      };
+    })
+  };
+  const body = {
+    model: VERIFY_MODEL,
+    temperature: 0.1,
+    max_tokens: parseInt(cfg('LLM_MAX_TOKENS') || '8192', 10),
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: VERIFY_PROMPT },
       { role: 'user', content: JSON.stringify(payload) }
     ]
   };
@@ -248,6 +303,51 @@ async function grade(rows) {
       const g = gradedMap.get(a.p.row) || { items: [] };
       a.items = sandbox.buildItemStates(a.p, g);
     });
+  }
+
+  // 阶段五：AI 核验专家——只核 negative/positive，带初判理由（仅供参考），明确矛盾才降级
+  const verifyTargets = [];
+  assembled.forEach(a => {
+    const idxs = [];
+    a.items.forEach((it, i) => { if (it.status === 'negative' || it.status === 'positive') idxs.push(i); });
+    if (idxs.length) verifyTargets.push({ ...a, idxs });
+  });
+  if (verifyTargets.length) {
+    const vTotal = verifyTargets.reduce((s, m) => s + m.idxs.length, 0);
+    console.log(`AI 核验：${vTotal} 条（${verifyTargets.length} 行），模型 ${VERIFY_MODEL}`);
+    let vCursor = 0, vDone = 0, vDown = 0;
+    async function vWorker() {
+      while (vCursor < verifyTargets.length) {
+        const m = verifyTargets[vCursor++];
+        try {
+          const statuses = m.idxs.map(i => m.items[i].status);
+          const notes = m.idxs.map(i => m.items[i].note || '');
+          const arr = await verify([{ ...m.p, onlyItems: m.idxs, statuses, notes }]);
+          for (const r of arr) {
+            if (!r) continue;
+            const list = Array.isArray(r.items) ? r.items : [];
+            list.forEach((v, k) => {
+              const idx = m.idxs[k];
+              if (idx == null) return;
+              const it = m.items[idx];
+              if (!it || v.agree !== false) return;   // 默认同意
+              const reason = String(v.reason || '').trim();
+              const conf = v.confidence == null ? 0 : Number(v.confidence);
+              if (!reason || conf < 0.7) return;      // 严格门槛
+              const prev = it.status;
+              it.status = 'uncertain';
+              it.note = `经核验转待确认（原${prev === 'negative' ? '负偏离' : '正偏离'}）：${reason.slice(0, 25)}`;
+              it.confidence = 0.5;
+              vDown++;
+            });
+          }
+        } catch (e) { /* 核验失败保留初判 */ }
+        vDone++;
+        process.stdout.write(`\r  AI 核验 ${vDone}/${verifyTargets.length} 行，降级 ${vDown} 条…`);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONC, verifyTargets.length) }, vWorker));
+    process.stdout.write('\n');
   }
 
   const results = [];

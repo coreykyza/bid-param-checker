@@ -12,3 +12,9 @@ dist/
 .git.has_key_history/
 .git.*_history/
 node_modules/
+# 密钥与敏感备份的历史事故防线（曾把 .env.zhipu.bak 打进仓库）
+*.bak
+*.pack
+*.idx
+*.key
+*.pem

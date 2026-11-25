@@ -224,6 +224,19 @@ function normText(s){
     .replace(/[。．.]+$/,'')                  // 去尾部句点
     .toLowerCase();
 }
+// 分组标题判定：硬件参数 / 软件参数 / 二、硬件参数 / 一、软件功能 这类不是具体条目。
+// 用户明确规则：带二级条目的第一级基本都不是项目条目；"硬件参数""软件参数"这类标题明确不是。
+function isGroupHeading(t){
+  const s=String(t||'').trim();
+  if(!s||s.length>14) return false;
+  const core=s.replace(/^\s*(?:(?:[一二三四五六七八九十百]+|\d+|[（(]\d+[）)])\s*[、.．)）:：]\s*)+/,'')
+              .replace(/[：:]\s*$/,'').trim();
+  if(!core||core.length>10) return false;
+  if(/[≥≤<>]|\d|[，,。；;！？!?]/.test(core)) return false;  // 含指标/数值/句子标点 → 是具体条目
+  if(/(参数|要求|规格|配置|功能|部分|指标|清单|明细|说明)$/.test(core)) return true;
+  if(/^(硬件|软件|系统|电气|屏幕|网络|技术|设备|产品|服务|其他|总体|整体|基本|主要|核心|主机|电视)$/.test(core)) return true;
+  return false;
+}
 /* ============ v2.0 条目拆分：保留招标原文序号 ============
    序号必须与 A 列原文完全一致：原文 "1、" → seq="1、"；原文 "二、1" → seq="二、1"
    seqRaw 保存原始写法（含分隔符），用于 C 列 【seqRaw】 输出 */
@@ -246,9 +259,18 @@ function splitItems(text){
     }
     const bracket=t.match(/^【(.+?)】$/);
     if(bracket){ section=bracket[1]; return; }
-    // 纯标题行：以冒号结尾、无数字无比较符、长度很短（如"沙盘主机："）→ 当分组标题，不算条目
-    if(/[：:]\s*$/.test(t) && t.length <= 15 && !/\d/.test(t) && !/[≥≤<>]|不少于|不低于|至少|不超过/.test(t)){
-      section = t.replace(/[：:]\s*$/,'');
+    // 分组标题（无编号的"硬件参数""软件参数""电气参数："等，以及带序号的一级项）：不算条目。
+    // 这些词是分组名，不是招标参数项——之前的 bug 把"硬件参数"当条目输出成"待确认"。
+    if(isGroupHeading(t)){
+      section=t.replace(/^\s*(?:(?:[一二三四五六七八九十百]+|\d+|[（(]\d+[）)])\s*[、.．)）:：]\s*)+/,'')
+               .replace(/[：:]\s*$/,'').trim()||section;
+      return;
+    }
+    // 分组标题行：以冒号结尾、核心文字短、无指标词 → 当标题，不算条目。
+    // 支持带序号的一级标题：'4、配置：' '1、硬件参数：'——下面挂二级条目时，第一级不是参数项。
+    const headingCore=t.replace(/^\s*(?:(?:[一二三四五六七八九十百]+|\d+|[（(]\d+[）)])\s*[、.．)）:：]\s*)+/,'');
+    if(/[：:]\s*$/.test(t) && headingCore.length <= 15 && !/[≥≤<>]|不少于|不低于|至少|不超过/.test(headingCore)){
+      section = headingCore.replace(/[：:]\s*$/,'');
       return;
     }
     // 条目行：捕获原始序号写法（数字+分隔符 / 中文序号+分隔符）
@@ -330,9 +352,9 @@ function buildItemStates(p,g){
     }else if(bp){
       // 2) 数值方向裁决。裁决后【重写 note】——模型给的措辞可能与实际方向相反
       //    （如把"响应16GB"写成"低于要求的8GB"），沿用会让结论自相矛盾。
-      const dir=numericVerdict(it.text,bp.text);
-      if(dir){
-        status=dir; note=dirNote(dir,it.text,bp.text); conf=null;
+      const vd=numericVerdict(it.text,bp.text);
+      if(vd){
+        status=vd.dir; note=dirNote(vd.dir,vd.av,vd.bv); conf=null;
       }else if(status==='matched'){
         // 数值不可比但语义已匹配 → 保持匹配，理由写"响应内容与要求一致"
         note='';
@@ -361,6 +383,23 @@ function buildItemStates(p,g){
       note='投标参数中未找到对应内容';
       conf=conf==null?0.5:conf;
     }
+    // 6) note 与 status 方向一致性兜底。
+    //    模型常把 "响应16G" 写成 "低于要求的16"（status=positive/matched 却说低于），
+    //    这类措辞出现在 C 列会让人以为判定错了。能取到数值就按数值重写，取不到就抹掉错误措辞。
+    const badForGood=/低于|不足|少于|小于|未达到|不满足|劣于/;
+    const goodForBad=/优于|高于|大于|超出|超过/;
+    const dirClash=((status==='matched'||status==='positive')&&badForGood.test(noteStr))
+                 ||(status==='negative'&&goodForBad.test(noteStr));
+    if(dirClash){
+      const av0=nums(it.text)[0];
+      const bv0=bp?valueForField(bp.text,fieldNameOf(it.text)):null;
+      if(av0!=null && bv0!=null){
+        const d=bv0<av0?'negative':(bv0>av0?'positive':'matched');
+        status=d; note=dirNote(d,av0,bv0); conf=null;
+      }else{
+        note='';
+      }
+    }
     // 无模型输入且本地判不出 → pending（交给 AI）；有模型输入但状态非法 → uncertain
     if(!['matched','positive','negative','uncertain'].includes(status)) status = m ? 'uncertain' : 'pending';
     if(status==='uncertain'&&conf==null) conf=0.5;
@@ -386,6 +425,55 @@ function scoreOverlap(a,b){
   let hit=0; grams.forEach(g=>{ if(nb.includes(g)) hit++; });
   return hit/grams.length;
 }
+// 字段别名表：A 条目字段名 → B 中可能出现的写法（英文/简称/同义字段）
+function getFieldAlias(){ return {
+  '内存':['内存','memory','ram','ddr','运存'],
+  '硬盘':['硬盘','存储容量','固态','ssd','rom','emmc','存储空间','闪存'],
+  '存储容量':['存储容量','硬盘','固态','ssd','rom','emmc','存储空间'],
+  '存储':['存储容量','硬盘','固态','ssd','rom','emmc'],
+  '分辨率':['分辨率','resolution'],
+  '主频':['主频','基础频率','基频'],
+  '睿频':['睿频','加速频率','boost','最大频率'],
+  '缓存':['缓存','cache'],
+  '显存':['显存','vram'],
+  '屏幕尺寸':['屏幕尺寸','尺寸','英寸','寸'],
+  '电视类型':['电视类型','电视','英寸','寸'],
+  '整机重量':['整机重量','重量','weight'],
+  '重量':['重量','整机重量','weight'],
+  '摄像头':['摄像头','像素','camera'],
+  '网络':['网络','以太网','网卡','wifi'],
+}; }
+// 从 A 条目提取字段名：去序号/阈值/数值/标点后取核心名词。
+// 例："内存：≥16G"→"内存"  "硬盘：≥120G SSD"→"硬盘"  "二、1 分辨率≥1920*1080px"→"分辨率"
+function fieldNameOf(text){
+  let s=String(text||'');
+  s=s.replace(/^\s*(?:(?:[一二三四五六七八九十百]+|\d+|[（(]\d+[）)])\s*[、.．)）:：]\s*)*/,'');
+  s=s.replace(/[≥≤]|>=|<=|不少于|不低于|不小于|不超过|不大于|最高|最多|至少|大于等于|小于等于/g,'');
+  s=s.replace(/\d+(?:\.\d+)?\s*[A-Za-z%°*×]*/g,'');
+  s=s.replace(/[：:、，,。；;（）()\[\]【】]/g,' ');
+  const m=s.trim().match(/[\u4e00-\u9fa5]{2,6}|[A-Za-z][A-Za-z0-9_-]{1,}/);
+  return m?m[0]:'';
+}
+// 在 B 文本中按字段名定位数值：取字段名后、下一字段/分隔符之前的第一个数字。
+// 关键：B 常是一整行配置（"CPU： Intel I7 8700，内存：16GB DDR4..."），
+// 直接取全文第一个数字会拿到型号 i7 的 7，产出"响应7，低于要求的16"这种误判。
+function valueForField(text,field){
+  const t=String(text||'');
+  if(!field){ const a=nums(t); return a.length?a[0]:null; }
+  const alias=getFieldAlias()[field]||[field];
+  const low=t.toLowerCase();
+  let pos=-1,used='';
+  for(const a of alias){
+    const p=low.indexOf(a.toLowerCase());
+    if(p>=0&&(pos<0||p<pos)){ pos=p; used=a; }
+  }
+  if(pos<0) return null;   // B 里没有这个字段 → 不裁决，交给模型/待确认
+  const rest=t.slice(pos+used.length, pos+used.length+60);
+  const cut=rest.search(/[,，;；\n]|[\u4e00-\u9fa5]{2,6}\s*[：:]/);
+  const seg=cut>0?rest.slice(0,cut):rest;
+  const n=nums(seg);
+  return n.length?n[0]:null;
+}
 // 取「数值 + 其后紧跟的单位」，用于校验两个数值是否可比
 function numWithUnit(text){
   const m=String(text||'').match(/(\d+(?:\.\d+)?)\s*([^\d\s,，。；;：:、（）()]{0,5})/);
@@ -396,28 +484,30 @@ function numWithUnit(text){
   if(/^[A-Za-z]+$/.test(unit)) unit=unit.toLowerCase();
   return {n:parseFloat(m[1]), unit};
 }
-// 数值方向裁决：返回 matched/positive/negative/null
-// 单位不一致时【不裁决】——如"使用时间≥110min" vs "电池续航16小时"，两个数字不可比，
-// 硬比会产出"响应16，低于要求的110"这种误导性结论。
+// 数值方向裁决：返回 {dir,av,bv} 或 null
+// 关键：B 的数值按 A 的【字段名】定位，不再取全文第一个数字。
+// 否则 "CPU：Intel I7 8700，内存：16GB DDR4，硬盘：120G固态" 会把型号 i7 的 7
+// 当成内存/硬盘响应值，产出"响应7，低于要求的16"这种误判（截图1的真实 bug）。
+// 多阈值条目仍不裁决（如"积木种类≥90种，积木数量≥900块"），交给模型逐项判。
 function numericVerdict(aText,bText){
-  // 多阈值条目不裁决：如"积木种类≥90种，积木数量≥900块"有两个阈值，
-  // 只比第一个数值会把"10mm"当阈值算，得出错误结论。这类交给模型逐项判。
   const nThresh=(aText.match(/[≥≤]|>=|<=|不少于|不低于|不小于|不超过|不大于|至少|最多/g)||[]).length;
   if(nThresh>1) return null;
   const lowM=aText.match(/[≥]|>=|不低于|不少于|不小于|至少|大于等于/);
   const highM=aText.match(/[≤]|<=|不超过|不大于|最高|最多|小于等于/);
-  const av=nums(aText), bv=nums(bText);
-  if(!av.length||!bv.length) return null;
+  const av=nums(aText);
+  if(!av.length) return null;
+  const field=fieldNameOf(aText);
+  const bv=valueForField(bText,field);
+  if(bv==null) return null;   // B 里找不到该字段 → 不裁决
   const ua=numWithUnit(aText), ub=numWithUnit(bText);
   if(ua&&ub&&ua.unit&&ub.unit&&ua.unit!==ub.unit) return null;   // 单位不同，不可比
-  if(lowM){ return bv[0]<av[0] ? 'negative' : (bv[0]>av[0] ? 'positive' : 'matched'); }
-  if(highM){ return bv[0]>av[0] ? 'negative' : (bv[0]<av[0] ? 'positive' : 'matched'); }
-  // 纯数字相等
-  if(av[0]===bv[0] && /\d/.test(aText)) return 'matched';
-  return null;
+  let dir=null;
+  if(lowM) dir=bv<av[0]?'negative':(bv>av[0]?'positive':'matched');
+  else if(highM) dir=bv>av[0]?'negative':(bv<av[0]?'positive':'matched');
+  else if(av[0]===bv && /\d/.test(aText)) dir='matched';
+  return dir?{dir,av:av[0],bv}:null;
 }
-function dirNote(dir,aText,bText){
-  const av=nums(aText)[0], bv=nums(bText)[0];
+function dirNote(dir,av,bv){
   if(dir==='negative') return `响应${bv}，低于要求的${av}`;
   if(dir==='positive') return `响应${bv}，优于要求的${av}`;
   return `响应${bv}，等于要求的${av}`;
@@ -603,6 +693,23 @@ const SYSTEM_PROMPT=`你是招投标文件对照专家。逐条比对招标要�
 - 输入每条给了 n 字段（该条在 A 列中的全局序号，从 1 开始）。必须把 n 原样回传到输出的 n 字段，用于精确对齐，【不要改写、不要重新编号】。
 - 若该条目在 A 列原文没有序号（纯文字段落），seq 写空字符串 ""。
 
+## 易错示例（务必照做）
+1. 分组标题不是参数项："硬件参数""软件参数""电气参数""4、配置"这类是分组名，不是一条招标要求。
+   其下挂的才是具体参数。若这类文字意外出现在输入里，按 uncertain 处理，note 写"分组标题，非参数项"，不要去比对。
+2. 一级项带二级项：如"一、支持角色选择，包括但不限于以下："下面挂"（1）支持五种游戏角色选择"，
+   一级项是引导语、不是可比对的参数；只对二级项（1）（2）逐条判定。
+3. note 方向必须与 status 一致：
+   · status=positive → note 只能说"优于/高于要求"，严禁写"低于要求"；
+   · status=matched → note 留空或写"等于要求"，严禁写"低于/不足"；
+   · status=negative → note 只能说"低于/不足要求"，严禁写"优于/超过"。
+4. 找不到对应内容→ uncertain，不是 negative：
+   A="内存：≥16G"，B 若只有"CPU：Intel I7 8700"、没有内存信息 → 判 uncertain，note"未找到内存参数"；
+   【严禁】从型号 i7 里抠出数字 7 当成内存响应值去判负偏离。
+5. 一行含多参数时按【字段名】取值，不取整行第一个数字：
+   B="CPU：Intel I7 8700，内存：16GB DDR4，硬盘：120G固态"，
+   判"内存≥16G"取内存字段的 16 → matched；判"硬盘≥120G SSD"取硬盘字段的 120 → matched。
+   取错字段会产出"响应7，低于要求的16"这种明显错误。
+
 ## 输出格式（只输出 JSON，不要任何解释文字）
 {"results":[
   {"row":2,
@@ -620,6 +727,38 @@ const SYSTEM_PROMPT=`你是招投标文件对照专家。逐条比对招标要�
 - note：matched 与 positive 可留空字符串；negative 与 uncertain 必须写清原因（≤25字），uncertain 还需给 confidence（0~1，一位小数）。
 - items 数组长度必须等于该行 A 列的条目数。若你不确定某条属于哪条，也不要省略。
 - results 顺序/数量与输入 rows 一致，row 原样返回。严禁跨行引用其他行内容。`;
+
+/* ============ v2.5 AI 核验专家：异构盲核 ============
+   只核 negative/positive；只给原文 + 初判状态，【不给初判理由】防止锚定。
+   核验者跨模型（.env 里 LLM_VERIFY_MODEL），避免同一个模型复核自己。 */
+const VERIFY_PROMPT=`你是招投标文件核验专家。独立复核【初判结论】是否成立，不要被初判状态带偏。
+
+## 输入
+每个条目给四样：招标原文、投标响应全文、初判状态、初判理由。
+【初判理由仅供参考，它自己也可能错】——请只依据原文的数值和文字独立判断。
+既不要因为看到理由就同意，也不要脑补一个初判根本没说过的说法去反驳。
+
+## 复核标准
+1. 只回答 agree（初判成立）或 disagree（初判错误）。
+2. 只有当你能从原文指出【明确矛盾】时才 disagree，例如：
+   · 初判 negative 说"低于要求"，但投标响应数值等于或高于要求；
+   · 初判 positive 说"优于要求"，但投标响应数值其实等于或低于要求；
+   · 把型号名里的数字当参数值（如把 Intel i7 的 7 当内存容量）。
+3. "可能不对""表述含糊"这类没有具体依据的怀疑一律 agree。
+4. 严禁脑靶子：例如初判 positive 的理由是"512KB SRAM 优于要求的 2KB"，
+   不要脑补成"初判认为 512KB 低于 2KB"再去反驳它。512KB 远大于 2KB，初判是对的。
+5. 你的职责是抓明确错误，不是重新判一遍。不确定就 agree。
+
+## 输出格式（只输出 JSON，不要解释文字）
+{"results":[
+  {"row":2,"items":[
+    {"n":1,"agree":true},
+    {"n":3,"agree":false,"reason":"内存16G等于要求16G，不是低于","confidence":0.9}
+  ]}
+]}
+硬性要求：
+- items 必须覆盖输入里的每一条，n 原样回传，顺序一致。
+- disagree 时 reason 必填（≤25字，指出具体矛盾），confidence 必填（0~1，一位小数）。`;
 
 /* 并发池：最多 limit 个任务同时执行，任一失败不影响其他 */
 async function runPool(items, limit, fn){
@@ -697,6 +836,51 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 
 
+
+/* ============ 核验请求：传初判理由但标注"仅供参考"，防脑补靶子 ============ */
+function buildVerifyPayload(pairs){
+  return JSON.stringify({rows:pairs.map(p=>{
+    const all=splitItems(p.a);
+    const use=(p.onlyItems&&p.onlyItems.length)?all.filter((_,i)=>p.onlyItems.includes(i)):all;
+    return {
+      row:p.row,
+      待核条目:use.map((it,k)=>({n:k+1,招标原文:it.text,初判状态:(p.statuses&&p.statuses[k])||'',初判理由:(p.notes&&p.notes[k])||''})),
+      投标响应:p.b
+    };
+  })});
+}
+async function aiVerifyBatch(pairs,attempt=1){
+  const url=$('proxyUrl').value.replace(/\/$/,'')+'/api/grade';
+  const ctl=new AbortController(); const tid=setTimeout(()=>ctl.abort(),120000);
+  try{
+    const r=await fetch(url,{
+      method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+      body:JSON.stringify({role:'verify',messages:[
+        {role:'system',content:VERIFY_PROMPT},
+        {role:'user',content:buildVerifyPayload(pairs)},
+      ]})
+    });
+    clearTimeout(tid);
+    if(!r.ok){
+      const e=await r.json().catch(()=>({}));
+      throw new Error('HTTP '+r.status+(e.message||e.detail?': '+(e.message||e.detail):''));
+    }
+    const data=await r.json();
+    const content=data.choices?.[0]?.message?.content;
+    if(!content) throw new Error('返回内容为空');
+    let clean=content.replace(/^```json\s*/i,'').replace(/```\s*$/,'').trim();
+    const parsed=JSON.parse(clean);
+    if(!Array.isArray(parsed.results)) throw new Error('JSON 缺少 results 数组');
+    return parsed.results;
+  }catch(err){
+    clearTimeout(tid);
+    if(attempt<=2 && !/abort/i.test(err.name+err.message)){
+      await sleep(600*attempt);
+      return aiVerifyBatch(pairs,attempt+1);
+    }
+    throw err;
+  }
+}
 
 /* ========================= 核验主流程 ========================= */
 $('btnVerify').addEventListener('click',async()=>{
@@ -826,6 +1010,49 @@ $('btnVerify').addEventListener('click',async()=>{
     assembled.forEach(a => {
       const g = gradedMap.get(a.p.row) || { items: [] };
       a.items = buildItemStates(a.p, g);
+    });
+  }
+
+  /* ============ 阶段五：AI 核验专家（异构复核） ============
+     只核 negative / positive；初判理由带过去但标注"仅供参考"——纯盲核会脑补靶子；
+     跨模型复核（防同源偏差）。
+     严格降级门槛：只有指出【具体矛盾】且 confidence≥0.7 才改待确认，否则保留初判。 */
+  const verifyTargets=[];
+  assembled.forEach(a=>{
+    const idxs=[];
+    a.items.forEach((it,i)=>{ if(it.status==='negative'||it.status==='positive') idxs.push(i); });
+    if(idxs.length) verifyTargets.push({...a, idxs});
+  });
+  if(verifyTargets.length){
+    const vTotal=verifyTargets.reduce((s,m)=>s+m.idxs.length,0);
+    pmsg.textContent=`AI 核验中…（${vTotal} 条有结论条目，盲核）`;
+    let vDone=0, vDown=0;
+    await runPool(verifyTargets, CONC, async (m)=>{
+      try{
+        const statuses=m.idxs.map(i=>m.items[i].status);
+        const notes=m.idxs.map(i=>m.items[i].note||'');
+        const arr=await aiVerifyBatch([{...m.p, onlyItems:m.idxs, statuses, notes}]);
+        for(const r of arr){
+          if(!r) continue;
+          const list=Array.isArray(r.items)?r.items:[];
+          list.forEach((v,k)=>{
+            const idx=m.idxs[k];
+            if(idx==null) return;
+            const it=m.items[idx];
+            if(!it || v.agree!==false) return;   // 默认同意，只有明确反对才进入降级判断
+            const reason=String(v.reason||'').trim();
+            const conf=v.confidence==null?0:Number(v.confidence);
+            if(!reason || conf<0.7) return;      // 无具体理由或置信度不足 → 保留初判
+            const prev=it.status;
+            it.status='uncertain';
+            it.note=`经核验转待确认（原${prev==='negative'?'负偏离':'正偏离'}）：${reason.slice(0,25)}`;
+            it.confidence=0.5;
+            vDown++;
+          });
+        }
+      }catch(e){ /* 核验异常保留初判，不让核验拖垮整次任务 */ }
+      vDone++;
+      pmsg.textContent=`AI 核验中…（${vDone}/${verifyTargets.length} 行，降级 ${vDown} 条）`;
     });
   }
 
