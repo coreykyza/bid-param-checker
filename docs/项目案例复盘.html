@@ -191,15 +191,14 @@ footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font
     <a href="#s0" class="on">摘要</a>
     <a href="#s1">1 · 项目背景</a>
     <a href="#s2">2 · 产品方案</a>
-    <a href="#s3">3 · 实现路径</a>
-    <a href="#s4">4 · 产出结果</a>
-    <a href="#s5">5 · 项目复盘</a>
-    <a href="#s6">6 · 可复用性</a>
+    <a href="#s3">3 · 落地结果</a>
+    <a href="#s4">4 · 过程复盘</a>
+    <a href="#s5">5 · 方法论</a>
   </nav>
   <div class="meta">
-    v2.4 · 2026-11-25<br>
+    v2.7 · 2026-11-25<br>
     11 个版本 / 2 天<br>
-    2417 行代码
+    视角：产品 + 交付
   </div>
 </aside>
 
@@ -207,16 +206,16 @@ footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font
 
 <!-- ============ 封面 ============ -->
 <div class="hero" id="s0">
-  <div class="tag">项目案例复盘</div>
+  <div class="tag">项目案例复盘 · 产品与交付视角</div>
   <h1>招投标参数核验工具</h1>
   <p class="sub">
-    把「244 个技术参数逐条人工比对」这件事，做成上传 Excel 就出带标红结论的本地工具。
-    两天 11 个版本迭代，从打补丁到架构重做。
+    把「技术参数逐条人工比对」这件规则明确但极其耗人的活，做成上传 Excel 就出结论的工具。
+    两天 11 个版本，从打补丁到架构重做，从本地能跑到客户能用。
   </p>
   <div class="kpis">
-    <div class="kpi"><div class="n">45<small>秒</small></div><div class="l">244 个参数点</div></div>
-    <div class="kpi"><div class="n">0<small>处</small></div><div class="l">模型漏判</div></div>
-    <div class="kpi"><div class="n">20<small>×</small></div><div class="l">换模型提速</div></div>
+    <div class="kpi"><div class="n">数十秒</div><div class="l">替代人工半小时级</div></div>
+    <div class="kpi"><div class="n">0<small>处</small></div><div class="l">漏判 / 模型漏返回</div></div>
+    <div class="kpi"><div class="n">100<small>%</small></div><div class="l">统计自洽</div></div>
     <div class="kpi"><div class="n">5<small>条</small></div><div class="l">自动验收全过</div></div>
   </div>
 </div>
@@ -224,433 +223,192 @@ footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font
 <!-- ============ 1 背景 ============ -->
 <section id="s1">
   <h2>01 / 项目背景</h2>
-  <div class="h2sub">一个规则明确、但极其耗人的活</div>
+  <div class="h2sub">为什么做：一笔时间账、一笔质量账、一笔一致性账</div>
 
-  <p>设备采购评标时，需要把招标文件的技术参数要求（A 列）和投标方的技术响应（B 列）逐条比对。真实文件是 <strong>28 行、244 个参数点</strong>，每行 A 列还是一段含多层编号的长文本。</p>
+  <p>设备或服务采购的招投标环节，评标要做一件很机械但很关键的事：把招标文件里的<strong>技术参数要求</strong>，和投标方提交的<strong>技术响应</strong>，逐条比对，判断每条是满足、不满足、还是说不清。</p>
+  <p>这不是开放式分析，而是一道<strong>有标准答案的判断题</strong>——规则明确、高频重复、判错代价高，天然适合产品化。</p>
 
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:46%">招标要求（A 列）</th><th style="width:30%">投标响应（B 列）</th><th>核验结论</th></tr>
-      <tr><td>1、处理器：≥6核12线程，主频≥2.3GHz，睿频≥3.8GHz，TDP≤35W（性能不低于 i5-10500T）</td><td>1、处理器：i5-14500</td><td><span class="pill p-que">?</span></td></tr>
-      <tr><td>2、内存：≥8GB DDR4</td><td>2、内存：16GB DDR4</td><td><span class="pill p-que">?</span></td></tr>
-      <tr><td>3、积木种类≥90种，积木数量≥900块</td><td>3、组件种类不少于40种，数量不少于323个</td><td><span class="pill p-que">?</span></td></tr>
-    </table>
-  </div>
-
-  <h3>人工做法的三个痛点</h3>
+  <h3>人工做，成本高在哪</h3>
   <div class="grid g3">
     <div class="card">
-      <div class="h"><span class="num">1</span>慢且枯燥</div>
-      <p>244 个参数点，一条平均 30 秒就是 2 小时；熟练的人也要 40 分钟以上。</p>
+      <div class="h"><span class="num">1</span>时间账</div>
+      <p>一份中等规模对照表，参数点通常几十到上百条。逐条读、找对应、判断，一条按 30 秒算，就是<strong>半小时到两小时</strong>的纯重复劳动，且每次采购都重来。</p>
     </div>
     <div class="card">
-      <div class="h"><span class="num">2</span>容易看漏</div>
-      <p>最危险的不是判错，是<strong>跳过去了没发现</strong>。要求"支持声纹识别"，响应里压根没提，人眼一扫就默认有了。</p>
+      <div class="h"><span class="num">2</span>质量账</div>
+      <p>最危险的不是判错，是<strong>漏了没发现</strong>。要求里提到某项能力、响应通篇没提——人眼扫过去容易默认"应该有吧"，实际是缺项，到验收阶段才暴露。</p>
     </div>
     <div class="card">
-      <div class="h"><span class="num">3</span>标准不统一</div>
-      <p>要求≥6自由度、响应9自由度，有人判满足有人判不一致；要求不低于 i5-10500T、响应 i5-14500，不懂硬件根本判不了。</p>
+      <div class="h"><span class="num">3</span>一致性账</div>
+      <p>同一个参数，不同人结论不同：≥8GB 响应 16GB 是"满足"还是"超出需澄清"？点名对标型号时不懂硬件根本判不了。结果<strong>不可复核、不可交接</strong>。</p>
     </div>
   </div>
 
   <div class="note">
-    <strong>为什么值得做：</strong>规则明确可自动化（不是开放式创作）、高频重复（每次采购都要做）、错了代价高（漏判负偏离会导致验收扯皮甚至采购损失）。
+    <strong>为什么值得做：</strong>规则可枚举（能表达成规则 + 语义判断）、高频复用（每次采购都做）、错误成本高（漏判负偏离会导致验收扯皮甚至采购损失）。三点决定它不是 demo，是有真实交付价值的产品。
   </div>
 </section>
 
-<!-- ============ 2 方案 ============ -->
+<!-- ============ 2 产品方案 ============ -->
 <section id="s2">
   <h2>02 / 产品方案</h2>
-  <div class="h2sub">四个设计决策撑起整个骨架</div>
+  <div class="h2sub">从痛点到设计：六个决策的追溯链</div>
 
-  <p>上传招标/投标对照 Excel → 逐条判定每条参数状态 → 输出带结论、明细、标红的核验报告。看似简单，但有四个决定成败的决策。</p>
+  <p><strong>一句话定义：</strong>上传招标/投标对照 Excel → 逐条判定每条参数的状态 → 输出带结论、可定位原文、带标红的核验报告。</p>
+  <p>产品定位不是"写一份漂亮报告"，而是"<strong>把需要人处理的地方挑出来</strong>"。这个定位决定了后面所有取舍。</p>
 
-  <h3>决策一 · 逐条四态判定，而不是"只报问题"</h3>
-  <div class="grid g2">
-    <div class="card" style="border-color:#f0c4c0">
-      <div class="h" style="color:var(--red)">✗ 错误做法（v1.x 犯过）</div>
-      <p>只让模型输出"有问题的条目"，满足的不管。</p>
-      <p><strong>后果：</strong>满足项被丢弃后，靠"总数 − 问题数"反推的满足数<strong>不可信</strong>。实际出过事故：模型报「共 10 项」，却列出 28 条问题。</p>
-    </div>
-    <div class="card" style="border-color:#b8dfcd">
-      <div class="h" style="color:var(--green)">✓ 正确做法</div>
-      <p>模型必须对<strong>每一条</strong>输出状态，四选一。核心约束：<strong>四个状态之和恒等于条目总数</strong>。</p>
-      <p>这条约束让所有统计天然自洽，不需要事后"修数字"。</p>
-    </div>
-  </div>
-
+  <h3>核心设计：痛点 → 决策</h3>
   <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:120px">状态</th><th>含义</th><th style="width:26%">示例</th></tr>
-      <tr><td><span class="pill p-ok">匹配</span></td><td>响应满足要求（含等于阈值）</td><td>要求≥8GB，响应8GB</td></tr>
-      <tr><td><span class="pill p-pos">正偏离</span></td><td>响应<strong>明确优于</strong>要求</td><td>要求≥8GB，响应16GB</td></tr>
-      <tr><td><span class="pill p-bad">负偏离</span></td><td>响应低于 / 不满足要求</td><td>要求≥90种，响应40种</td></tr>
-      <tr><td><span class="pill p-unc">待确认</span></td><td>投标里找不到对应内容，或表述含糊</td><td>要求声纹识别，响应未提及</td></tr>
-    </table>
+  <table>
+    <thead><tr><th>用户痛点</th><th>设计决策</th><th>为什么这样解</th></tr></thead>
+    <tbody>
+      <tr><td>逐条比对慢、量大</td><td><strong>判定权分层</strong>：规则本地判，语义歧义送模型</td><td>把昂贵的 AI 调用留给真正需要理解力的地方</td></tr>
+      <tr><td>漏判看不出</td><td><strong>四态判定</strong>：缺项显式归入"待确认"</td><td>"没找到"必须暴露成结果，不能被默认为"满足"</td></tr>
+      <tr><td>统计对不上、不可复核</td><td><strong>输出契约固定</strong>：四态之和恒等于条目总数</td><td>结构约束让统计天然自洽，不用事后修数字</td></tr>
+      <tr><td>结论对不上原文</td><td><strong>序号严格同步原文</strong>，不重新编号</td><td>用户拿结论回 Excel 找原文，靠的就是原始序号</td></tr>
+      <tr><td>满屏结论看不出重点</td><td><strong>两档汇总 + 只列问题 + 标红招标列</strong></td><td>只让用户看"有没有问题、问题在哪"</td></tr>
+      <tr><td>型号参数不懂</td><td><strong>内置领域参数库</strong>，型号对标由库裁决</td><td>把领域知识沉淀成产品能力，不靠模型临时发挥</td></tr>
+    </tbody>
+  </table>
   </div>
 
-  <h3>决策二 · 序号严格同步招标原文</h3>
-  <p>招标原文是多层编号的：</p>
-  <pre><code>一、脑电波采集交互
-1.采集方式：佩戴设备
-2.实时采集信号
-二、手势识别交互
-1.采集方式：屏幕绘制</code></pre>
-  <p>结论里必须原样输出 <code>【1.】</code>、<code>【二、1】</code>、<code>【（3）】</code>，<strong>不重新编号</strong>。</p>
-  <div class="note">
-    <strong>为什么这是关键：</strong>用户拿着结论回 Excel 找原文，靠的就是序号。如果我自己造"第1项、第2项"，用户根本对不上。多章节场景下四个章节都有"1."，重编号必然混乱。
-  </div>
-
-  <h3>决策三 · 汇总只有两档，明细只列问题</h3>
-  <p>汇总：<strong>全部满足 / 部分满足</strong>，没有第三档。明细：<strong>只列负偏离和待确认</strong>，不列匹配和正偏离。</p>
-  <p>因为工具的定位是"<strong>找出需要人处理的地方</strong>"，不是"写一份完整报告"。用户扫一眼 C 列，只想知道：这行有没有问题、问题在哪。</p>
-  <pre><code>部分满足｜共17项：负偏离6/待确认10/匹配0/正偏离1
-
-负偏离：
-  1、【2、】存储不低于16GB，支持SD卡。->仅4M flash/224K RAM，远低于16GB且未提SD卡
-  2、【3、】主控器配备不小于4英寸触摸屏。->响应128*64LCD屏，远小于4英寸触摸屏
-
-待确认：
-  1、摄像头像素300w->投标参数中未找到对应内容，置信度0.5</code></pre>
-
-  <h3>决策四 · 标红只标招标列</h3>
-  <p><strong>最初做法</strong>：把 C 列结论整格标红 → 红色满屏，反而看不出重点。用户要看的是"招标要求里哪一条有问题"，不是"哪一行有问题"。</p>
-  <p><strong>最终做法</strong>：只把 A 列中负偏离/待确认的<strong>那几段文字</strong>标红加粗，C 列不整格红。</p>
-
-  <div class="note warn">
-    <strong>这个决策带来一个硬技术难点：</strong>Excel 一个单元格内的局部文字变色，需要写富文本（rich text runs）。普通导出库只支持整格样式，做不到。解法见下一节。
-  </div>
-
-  <h3>最大的产品教训 · 需求必须写成可验收的规格</h3>
-  <p>v1.x 阶段我是<strong>靠用户发截图反馈</strong>迭代的：说这里不对，我修一下，再等下一张。修了四轮，用户评价"<strong>质量很差</strong>"。</p>
-  <p>转折点是用户自己手写了一份需求文档，写清了：每个条目独立判定、统计口径、序号同步原文、汇总两档、明细只列问题、标红的是招标列。</p>
   <div class="note good">
-    <strong>拿到文档后我做的第一件事不是改代码，而是逐条比对现有实现，判定"结构不匹配，必须重做"。</strong><br><br>
-    产品经理的价值不在于提需求，而在于把需求写成可验收的规格。用户脑子里清楚"序号要同步原文"，但前四轮从没说过，因为觉得"这不是显然的吗"。恰恰是这些"显然的细节"，决定了工具能不能用。
+    <strong>产品判断最重的两条：</strong>① 把"不确定性"设计成一等公民——市面上很多工具把"没找到"当"满足"糊弄过去，那是拿用户验收风险换好看报告；② 克制——功能上能输出全部条目理由，但那会让真问题淹没在信息里。产品价值不在"给得多"，在"让用户一眼看到该看的"。
   </div>
+
+  <h3>产品结构：四层，职责边界清晰</h3>
+  <pre><code>输入层    Excel 上传 → 识别 A 列（要求）/ B 列（响应）
+   ↓
+理解层    条目拆分（含多层编号）→ 结构识别（过滤分组标题）
+   ↓
+判定层    本地规则（数值/文本/型号库）→ 语义歧义送模型 → 异议复核
+   ↓
+输出层    四态结论 → 统计汇总 → 原文定位 → 标红导出</code></pre>
+  <p><strong>分层的好处：</strong>任何一层出问题可单独定位、单独替换——模型不行换模型，不影响拆分和导出；拆分规则要改，不用动判定逻辑。</p>
 </section>
 
-<!-- ============ 3 实现 ============ -->
+<!-- ============ 3 落地结果 ============ -->
 <section id="s3">
-  <h2>03 / 实现路径</h2>
-  <div class="h2sub">三个技术难点 + 三板斧提速</div>
+  <h2>03 / 落地结果</h2>
+  <div class="h2sub">用数据说话，用典型场景说明边界</div>
 
-  <h3>技术选型</h3>
+  <h3>效果数据</h3>
+  <p>在一份中等规模真实样本（数十行、上百个参数点）上的实测：</p>
   <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:100px">层</th><th style="width:38%">选择</th><th>为什么</th></tr>
-      <tr><td>前端</td><td>单页 HTML（1217 行，无框架）</td><td>产品经理要能自己启动、自己改。不需要构建工具</td></tr>
-      <tr><td>后端</td><td>Python 标准库 HTTP 服务（200 行）</td><td>只做两件事：托管静态文件 + 转发 LLM 请求（藏住 key）</td></tr>
-      <tr><td>模型</td><td>火山引擎 Ark · DeepSeek V4.1 Flash</td><td>换模型是最大的性能杠杆（后面详述）</td></tr>
-      <tr><td>Excel</td><td>SheetJS（读）+ JSZip（后处理富文本）</td><td>局部标红需要绕过库的限制</td></tr>
-      <tr><td>部署</td><td>本地运行，双击 <code>.command</code></td><td>数据敏感（招投标文件），不出内网</td></tr>
-    </table>
+  <table>
+    <thead><tr><th>维度</th><th>人工基线</th><th>工具结果</th></tr></thead>
+    <tbody>
+      <tr><td>单次耗时</td><td>半小时 ~ 两小时</td><td><strong>浏览器几十秒 / 命令行秒级</strong></td></tr>
+      <tr><td>漏判</td><td>依赖人眼，难发现</td><td>缺项显式归入待确认，<strong>0 漏判</strong></td></tr>
+      <tr><td>统计自洽</td><td>人工汇总易错</td><td><strong>100%</strong>（四态之和恒等于总数）</td></tr>
+      <tr><td>判定一致性</td><td>因人而异</td><td>规则 + 契约约束，<strong>同输入同输出</strong></td></tr>
+      <tr><td>验收断言</td><td>无</td><td><strong>5 条自动断言全部通过</strong></td></tr>
+    </tbody>
+  </table>
   </div>
 
-  <h3>难点一 · 单元格内局部文字标红</h3>
-  <p><strong>问题</strong>：SheetJS 只能读富文本、<strong>不能写</strong>（写进去得到空值）。Excel 的"一格内部分文字变色"需要 <code>&lt;is&gt;&lt;r&gt;&lt;rPr&gt;</code> 这样的富文本 XML。</p>
-  <pre><code><span class="c">// 正常导出 xlsx → 用 JSZip 打开 → 直接改 sheet XML</span>
-&lt;c r="A15" s="4" t="inlineStr"&gt;
-  &lt;is&gt;
-    &lt;r&gt;&lt;rPr&gt;...正常样式...&lt;/rPr&gt;&lt;t&gt;前面的文字&lt;/t&gt;&lt;/r&gt;
-<span class="hl">    &lt;r&gt;&lt;rPr&gt;&lt;color rgb="FFFF0000"/&gt;&lt;b/&gt;&lt;/rPr&gt;&lt;t&gt;要标红的文字&lt;/t&gt;&lt;/r&gt;</span>
-  &lt;/is&gt;
-&lt;/c&gt;</code></pre>
-  <div class="note warn">
-    <strong>踩的坑：</strong>读单元格文本时，部分原文件的 <code>c.r</code> 是<strong>原始 XML 字符串</strong>（<code>&lt;t&gt;...&amp;#10;...</code>），直接当文本用会污染标红内容。必须优先取 <code>c.v</code>。
-  </div>
-
-  <h3>难点二 · 给条目找对「对应的投标内容」</h3>
-  <p>这是整个项目<strong>最容易错、也最影响准确率</strong>的地方。场景：A 列第 3 条要求「积木种类≥90种」，B 列里哪一条是它的响应？</p>
+  <h3>典型场景：不看某份文件，看可复用的五类</h3>
   <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:30%">试过的方法</th><th>为什么不行</th></tr>
-      <tr><td>按序号匹配</td><td>多章节场景下 A 有 4 个"1."，B 也有 4 个，全对错了</td></tr>
-      <tr><td>按文本相似度</td><td>长词分词放大数值差异，"≥8GB" vs "16GB" 相似度不足 0.5，找不到对应条目 → 数值判断根本没机会跑</td></tr>
-      <tr><td>按位置</td><td>A/B 条目数经常不相等（B 可能合并或拆分），位置对不上</td></tr>
-    </table>
-  </div>
-  <p><strong>最终解法：序号 + 同序号出现次序</strong></p>
-  <pre><code>A 的第 1 个 "1."  →  B 的第 1 个 "1."
-A 的第 2 个 "1."  →  B 的第 2 个 "1."</code></pre>
-  <p>同时把文本相似度从「长词命中率」改成 <strong>2-gram 滑窗命中率</strong>做兜底。效果：<code>不少于6自由度</code> vs <code>9自由度（颈部6+机身1+天线2）</code> 从"匹配失败"变成"正确判正偏离"。</p>
-  <div class="note warn">
-    <strong>全场最重要的技术教训：</strong>"找对应关系"比"做判断"更容易出错。找错对象时，后面所有数值比较、文本一致性判断全部建立在错误基础上，答案必然错，而且错得毫无征兆。
+  <table>
+    <thead><tr><th>场景类型</th><th>典型表现</th><th>结论</th><th>判断依据</th></tr></thead>
+    <tbody>
+      <tr><td>数值优于要求</td><td>要求 ≥X，响应 &gt;X</td><td><span class="pill p-pos">正偏离</span></td><td>数值方向裁决</td></tr>
+      <tr><td>数值低于要求</td><td>要求 ≥X，响应 &lt;X</td><td><span class="pill p-bad">负偏离</span></td><td>带具体数字说明差多少</td></tr>
+      <tr><td>单位不可比</td><td>要求 min，响应"小时"</td><td><span class="pill p-unc">待确认</span></td><td>单位不同不硬比，交人工</td></tr>
+      <tr><td>型号性能对标</td><td>"不低于 A 型号" vs B 型号</td><td><span class="pill p-que">库裁决</span></td><td>比核数/线程/睿频，不比基础频率，功耗不参与</td></tr>
+      <tr><td>缺项 / 分组标题</td><td>响应未提；或"硬件参数"大标题</td><td><span class="pill p-unc">待确认/过滤</span></td><td>不把标题当条目，不把缺项当满足</td></tr>
+    </tbody>
+  </table>
   </div>
 
-  <h3>难点三 · 型号参数需要外部知识</h3>
-  <p><strong>问题</strong>：要求「≥6核12线程（性能不低于 i5-10500T）」，响应「i5-14500」。模型不知道这两颗 CPU 谁强，判成了"负偏离"。</p>
-  <p><strong>解法</strong>：建本地型号参数库 —— 101 个内置型号（Intel 8~14 代、AMD、NVIDIA、树莓派），字段含核数/线程/频率/功耗/显存。</p>
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:38%">关键设计决策</th><th>原因</th></tr>
-      <tr><td>型号之间<strong>只比核数/线程/睿频，不比基础频率</strong></td><td>i5-14500 基础频率 2.5，<strong>反而低于</strong> i5-10500T 的 2.9，但它是 14 核。比基础频率会得出"14500 更差"的荒谬结论</td></tr>
-      <tr><td>点名"性能不低于 X 型号"时，<strong>功耗不参与</strong></td><td>i5-14500 是 65W，会撞上招标的"TDP≤35W"被判负偏离，但它性能远超。点名对标型号时用的是"性能档位"语义，不是散热约束</td></tr>
-      <tr><td>投标<strong>没给型号时判待确认</strong></td><td>不知道就是不知道，让人工去核，不能瞎判</td></tr>
-    </table>
+  <div class="note">
+    <strong>案例 A · 型号对标反直觉：</strong>点名"性能不低于 A 型号"时，B 型号基础频率反而更低，但它是更新代、核心翻倍。按"数字大的更好"会判成负偏离——错的。产品上把"型号对标"单独定义成场景，明确"比代际和核心规格、不比单一频率、功耗不参与"，并把参数库作为产品能力内置。这类判断靠提示词说不清，必须靠产品规则 + 数据。
   </div>
   <div class="note good">
-    <strong>结果：</strong>i5-14500 那条从「负偏离：低于 i5-10500T」变成「<strong>正偏离</strong>：核数 14vs6、线程数 20vs12、睿频 4.9vs4.3」。
+    <strong>案例 B · 单位不可比的克制：</strong>要求"续航≥110min"，响应"16小时"。数字上 16&lt;110 看似负偏离，但单位不同根本不能比。工具判"待确认"并说明原因。一个诚实的确定性，比一个看起来确定的错误答案更有价值。
   </div>
 
-  <h3>性能三板斧：264 秒 → 6.6 秒</h3>
-  <div class="perf">
-    <div class="row">
-      <div class="lab">v2.1 基线</div>
-      <div class="bar"><div class="fill f1" style="width:100%">全量送模型，串行</div></div>
-      <div class="val">264s</div>
-    </div>
-    <div class="row">
-      <div class="lab">v2.2 本地预判 + 并发</div>
-      <div class="bar"><div class="fill f2" style="width:53%">60% 本地判 + 并发</div></div>
-      <div class="val">141s</div>
-    </div>
-    <div class="row">
-      <div class="lab">v2.3 换 DeepSeek</div>
-      <div class="bar"><div class="fill f3" style="width:3%"></div></div>
-      <div class="val">6.6s</div>
-    </div>
-  </div>
-
-  <div class="grid g3">
-    <div class="card">
-      <div class="h"><span class="num">1</span>本地预判</div>
-      <p>文本完全一致、单阈值数值比对、型号库能查、B 列找不到 → 四类本地直接判。</p>
-      <p><strong>147/243 条（60%）</strong>不送 AI。</p>
-    </div>
-    <div class="card">
-      <div class="h"><span class="num">2</span>只送待判 + 并发</div>
-      <p>按片（8 条）并发，界面可调并发数，实测 8 最快。</p>
-      <p>补漏要<strong>按行聚合</strong>重试，不能按单条 —— 只发一条时模型缺上下文会宽松判成匹配。</p>
-    </div>
-    <div class="card">
-      <div class="h"><span class="num">3</span>换模型</div>
-      <p>141s → <strong>6.6s</strong>，漏返回 15 处 → <strong>0 处</strong>，多阈值条目从判错变判对。</p>
-      <p>耗时降到 1/20，<strong>准确率还提升了</strong>。</p>
-    </div>
-  </div>
-
-  <div class="note warn">
-    <strong>最大的反思：</strong>v2.1→v2.2 我花大功夫做工程优化（本地预判、并发、补漏），264s 压到 141s 觉得挺满意。但换模型一步就把 141s 压到 6.6s。<br><br>
-    当你发现自己在反复给模型的能力不足打补丁时，先问问是不是选错了模型。
-  </div>
-
-  <h3>工程配套 · 让 AI 能自证</h3>
-  <p>这个项目有个特殊约束：<strong>我没有图形界面可以点</strong>，每次验证都要重启服务 + 开浏览器 + 等几分钟。所以做了套命令行工具链，不依赖浏览器就能跑完整链路。</p>
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:34%">工具</th><th>作用</th></tr>
-      <tr><td><code>tools/xlsx转json.py</code></td><td>源表 → JSON（含脏数据过滤）</td></tr>
-      <tr><td><code>tools/回归验证.js</code></td><td>命令行跑完整判定链路，5 分钟跑完 28 行</td></tr>
-      <tr><td><code>tools/生成结果Excel.py</code></td><td>JSON → 带格式和标红的 xlsx</td></tr>
-      <tr><td><code>tools/验收检查.py</code></td><td><strong>5 条验收标准自动核对</strong></td></tr>
-    </table>
-  </div>
-  <p><strong>验收脚本是关键</strong>：它把"需求文档"变成了可执行断言 ——</p>
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:80px">验收</th><th>断言</th></tr>
-      <tr><td>验收1</td><td>统计数字自洽（四数之和 == 条目总数）</td></tr>
-      <tr><td>验收2</td><td>统计数字 == 明细行数</td></tr>
-      <tr><td>验收3</td><td>序号严格同步招标原文</td></tr>
-      <tr><td>验收4</td><td>A 列标红行数 == C 列"部分满足"行数</td></tr>
-      <tr><td>验收5</td><td>"全部满足"行不出现明细</td></tr>
-    </table>
-  </div>
-  <div class="note">
-    每次改完代码跑一遍，<strong>不靠肉眼判断"应该没问题"</strong>。
-  </div>
+  <h3>交付形态</h3>
+  <p>单页 HTML + 本地代理，双击启动；命令行回归工具链，不依赖浏览器就能跑完整链路 + 自动验收；公网版本部署到云服务器，支持访问口令 + 开机自启，客户外网可用。</p>
 </section>
 
-<!-- ============ 4 结果 ============ -->
+<!-- ============ 4 过程复盘 ============ -->
 <section id="s4">
-  <h2>04 / 产出结果</h2>
-  <div class="h2sub">不是"跑通了"，是逐条核对过对错</div>
+  <h2>04 / 过程复盘</h2>
+  <div class="h2sub">产品与交付视角的五个关键决策点</div>
+  <p>不按"写了什么代码"流水账，按五个决策点讲——每个都回答：遇到什么、怎么想、怎么解、沉淀了什么。</p>
 
-  <h3>量化指标</h3>
-  <div class="grid g3">
-    <div class="card"><div class="h">处理规模</div><p><strong style="font-size:20px">28 行 / 244 个</strong><br>招投标参数点</p></div>
-    <div class="card"><div class="h">耗时</div><p><strong style="font-size:20px">45 秒</strong>（浏览器并发 8）<br><strong>6.6 秒</strong>（命令行）</p></div>
-    <div class="card"><div class="h">稳定性</div><p>失败行 <strong>0</strong><br>模型漏返回 <strong>0</strong> 处</p></div>
-    <div class="card"><div class="h">统计自洽</div><p><strong style="font-size:20px">100%</strong><br>244 = 匹配+正偏离+负偏离+待确认</p></div>
-    <div class="card"><div class="h">自动验收</div><p><strong style="font-size:20px">5 / 5</strong><br>断言全部通过</p></div>
-    <div class="card"><div class="h">标红准确</div><p>9 处标红<br>== 9 行部分满足，完全一致</p></div>
-  </div>
-
-  <h3>准确率验证（关键案例逐条核对）</h3>
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:18%">案例</th><th style="width:26%">招标要求</th><th style="width:20%">投标响应</th><th style="width:16%">正确结论</th><th>工具结论</th></tr>
-      <tr><td>数值超标</td><td>内存≥8GB</td><td>16GB</td><td>正偏离</td><td><span class="pill p-ok">✓ 正偏离</span></td></tr>
-      <tr><td>数值不足</td><td>积木≥90种 / ≥900块</td><td>40种 / 323块</td><td>负偏离</td><td><span class="pill p-ok">✓ 负偏离</span>（带具体数字）</td></tr>
-      <tr><td>型号对比</td><td>不低于 i5-10500T</td><td>i5-14500</td><td>正偏离</td><td><span class="pill p-ok">✓ 正偏离</span>（核数14vs6）</td></tr>
-      <tr><td>单位不可比</td><td>使用时间≥110min</td><td>电池续航16小时</td><td>待确认</td><td><span class="pill p-ok">✓ 不硬比</span>（单位不同）</td></tr>
-      <tr><td>缺项</td><td>支持 VoiceID 声纹</td><td>未提及</td><td>待确认</td><td><span class="pill p-ok">✓ 待确认</span></td></tr>
-      <tr><td>原文照抄</td><td>支持人脸识别</td><td>支持人脸识别</td><td>匹配</td><td><span class="pill p-ok">✓ 匹配</span></td></tr>
-    </table>
-  </div>
-  <div class="note">
-    <strong>最后两行最容易判错</strong>：模型倾向于把"找不到对应内容"判成"负偏离"。需求明确写了这种情况是待确认，所以在前端加了硬规则 ——
-    负偏离理由里出现"未提及/未提供/未找到"自动改判待确认；<strong>但</strong>如果有"不足/低于/未达到"（明确不满足），保持负偏离。
-  </div>
-
-  <h3>交付物结构</h3>
-  <pre><code>bid-param-checker/
-├── index.html              <span class="c">前端全部逻辑（1217 行）</span>
-├── server.py               <span class="c">本地代理（200 行，藏 key）</span>
-├── data/
-│   ├── hw-specs.js         <span class="c">型号参数库（101 个）</span>
-│   └── hw-matcher.js       <span class="c">型号匹配与裁决</span>
-├── tools/                  <span class="c">命令行工具链（4 个）</span>
-├── docs/
-│   ├── 01-需求基线.md      <span class="c">← 开发验收的唯一依据</span>
-│   └── 02-测试用例.md
-├── CHANGELOG.md            <span class="c">11 个版本的完整记录</span>
-├── 启动工具.command         <span class="c">双击启动（自带看门狗）</span>
-└── 安装自启服务.command     <span class="c">launchd 守护</span></code></pre>
-</section>
-
-<!-- ============ 5 复盘 ============ -->
-<section id="s5">
-  <h2>05 / 项目复盘</h2>
-  <div class="h2sub">最有价值的部分：四条弯路</div>
-
-  <h3>先看做对了什么</h3>
-  <div class="grid g2">
-    <div class="card">
-      <div class="h">判定权分层：规则优先，模型兜底</div>
-      <p>不确定的规则（数值大小、型号性能、文本完全一致）全部放前端代码，只有"需要语义理解"的才交给模型。</p>
-      <p>结果：模型即使判错，也会被本地规则纠正。这解释了为什么换模型前后关键案例都判得对。</p>
-    </div>
-    <div class="card">
-      <div class="h">加了自动验收，不靠肉眼</div>
-      <p>5 条断言覆盖了最容易出错的统计一致性和格式同步。</p>
-      <p>v2.0 之后没再出现"统计不自洽"这类低级问题。</p>
-    </div>
-    <div class="card">
-      <div class="h">需求文档化后才动手</div>
-      <p>虽然是被"骂"出来的，但拿到手写需求后重做的效率，远高于之前四轮散点修补。</p>
-    </div>
-    <div class="card">
-      <div class="h">把踩坑原因写进代码注释</div>
-      <p>比如「这里要用 pre 不能用 rows」「型号对比不比基础频率」。</p>
-      <p><strong>原因：</strong>项目大量依赖 AI 辅助编码，而 AI 每次对话都是失忆的。不写下来，下次同样会犯。</p>
-    </div>
-  </div>
-
-  <h3>四条弯路</h3>
   <div class="tl">
-    <div class="item">
-      <div class="t">弯路一 · 给模型的错误打补丁，越打越歪（v1.0 → v1.4）</div>
-      <div class="d">
-        现象：用户说"这条判错了" → 加条规则 → 下次另一条又错 → 再加规则。四轮下来修了数值方向、二级序号、局部高亮、正偏离误报。<br><br>
-        <strong>根本问题不是某条规则不对，是数据契约错了。</strong>v1.x 让模型"只报有问题的条目"，满足项被丢掉，前端靠"总数 − 问题数"反推满足数。这个设计从第一天就不可能自洽。
-      </div>
-      <div class="fix">用户手写需求文档 → 逐条比对现有实现 → 判定"结构不匹配，必须重做" → v2.0 输出契约改成"每条都必须给状态"</div>
+    <div class="item done">
+      <div class="t">决策点 1 · 需求基线事件（产品第一课）</div>
+      <div class="d"><strong>遇到：</strong>根据零散反馈迭代，用户发截图说"这里不对"就修，修了四轮，评价"质量很差"。</div>
+      <div class="d"><strong>怎么想：</strong>不是修得不够细，是需求从来没被规格化。用户觉得"序号同步原文、汇总两档"是显然的，从没说过。</div>
+      <div class="fix"><strong>怎么解：</strong>拿到手写需求后逐条比对现有实现，判定"结构不匹配必须重做"，v2.0 重构。</div>
+      <div class="d" style="margin-top:8px"><strong>沉淀：</strong>产品经理的价值不在接需求，在于把需求写成<strong>可验收的规格</strong>。</div>
     </div>
-    <div class="item">
-      <div class="t">弯路二 · 只跑单行就宣布"修好了"（v2.4 翻车）</div>
-      <div class="d">
-        v2.2 加进度提示时写了 <code>rows.reduce((s,r) =&gt; s + r.items.filter(...))</code>。但 <code>rows</code> 是原始行，没有 <code>items</code> 字段。用户一点核验就崩。<br><br>
-        为什么没发现：这行在 <code>if (jobs.length)</code> 里面，只有"存在需要送 AI 的条目"才执行。我测试的样本本地就判完了，走不到这行。
-      </div>
-      <div class="fix">改主流程后必须跑全量。另外异步主流程应默认包 try/finally 复位 UI —— 这次出错后按钮永久锁死，只能刷新页面，是二次伤害</div>
-    </div>
-    <div class="item">
-      <div class="t">弯路三 · 把工程优化当成了主要矛盾（v2.2）</div>
-      <div class="d">
-        花不少功夫做本地预判、并发池、补漏机制，264s → 141s，觉得挺满意。<br><br>
-        真相：换个模型 141s → 6.6s，而且准确率还提升了（漏返回 15 → 0）。
-      </div>
-      <div class="fix">优化之前先量瓶颈在哪。这次瓶颈根本不在我的代码里，在模型。不断给模型失误做兜底逻辑，本身就是"该换模型"的信号</div>
-    </div>
-    <div class="item">
-      <div class="t">弯路四 · 型号对比一开始比了基础频率</div>
-      <div class="d">
-        i5-14500（基础 2.5GHz）被判"不如" i5-10500T（2.9GHz），但它其实是 14 核的新一代。
-      </div>
-      <div class="fix">建参数库时，字段可比性要逐个确认。同类产品的不同定位（桌面/移动、标压/低压），有些指标天然不可横向比较</div>
-    </div>
-  </div>
 
-  <h3>六条可迁移的教训</h3>
-  <div class="lessons">
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">数据契约错了，改提示词没用</div><div class="s">任何 LLM 应用。模型输出形状 ≠ 业务需要形状时，重设计输出格式</div></div></div>
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">确定性规则放代码，语义判断放模型</div><div class="s">数值、格式、型号这类有标准的，别指望模型</div></div></div>
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">"找对应关系"比"做判断"更易出错</div><div class="s">表对表比对、记录匹配、实体对齐类需求</div></div></div>
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">换模型 &gt; 调工程</div><div class="s">发现自己一直在给模型的错兜底时</div></div></div>
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">需求要写成可验收的规格，不是口头描述</div><div class="s">产品与开发的协作，尤其是和 AI 协作</div></div></div>
-    <div class="lesson"><div class="i"></div><div class="b"><div class="t">改主流程必须跑全量验证</div><div class="s">任何交付前的最后一道关</div></div></div>
-  </div>
-
-  <h3>如果重来一次</h3>
-  <div class="grid g2">
-    <div class="card" style="border-color:#b8dfcd">
-      <div class="h" style="color:var(--green)">会提前做的三件事</div>
-      <p><strong>1. 第一天就要一份书面需求基线</strong><br>成本：用户多花 1 小时写文档。收益：省掉四轮返工。</p>
-      <p><strong>2. 第一天就搭自动验收脚本</strong><br>v2.0 之后才有，但那之后没再出现统计不自洽这类低级问题。</p>
-      <p><strong>3. 先用最强模型跑通，再考虑降本</strong><br>一开始用免费模型省成本，结果大量时间花在跟模型能力不足搏斗。</p>
+    <div class="item done">
+      <div class="t">决策点 2 · 数据契约重做（结构性问题的识别）</div>
+      <div class="d"><strong>遇到：</strong>模型只输出问题条目，满足项丢弃，靠"总数-问题数"反推——出现过"总数报10项却列28条问题"。</div>
+      <div class="d"><strong>怎么想：</strong>连续修同类问题边际收益递减，不是某条规则不对，是<strong>模型输出形状和业务需要形状不一致</strong>。</div>
+      <div class="fix"><strong>怎么解：</strong>契约改成"每条必须给状态"，四态之和恒等于总数，统计自然自洽。</div>
+      <div class="d" style="margin-top:8px"><strong>沉淀：</strong>连续三轮修同类问题时，停下来问——是不是底层契约错了？</div>
     </div>
-    <div class="card" style="border-color:#c9d6e8">
-      <div class="h" style="color:var(--brand)">会保持不变的两件事</div>
-      <p><strong>1. 判定权分层</strong>（规则优先、模型兜底）<br>这是准确率的根基。</p>
-      <p><strong>2. 输出格式严格遵守规格</strong>（序号同步原文、两档汇总、只标 A 列）<br>这是它"能用"而不是"看起来能用"的原因。</p>
+
+    <div class="item done">
+      <div class="t">决策点 3 · 性能瓶颈定位（交付的判断力）</div>
+      <div class="d"><strong>遇到：</strong>全量核验 264 秒，太慢。</div>
+      <div class="d"><strong>怎么想：</strong>先量瓶颈在哪。做工程优化（本地预判、并发、补漏）264s→141s，但瓶颈不在代码里，在模型。</div>
+      <div class="fix"><strong>怎么解：</strong>换模型 141s→秒级，漏返回 15→0；关掉思考模式再省一半时间。</div>
+      <div class="d" style="margin-top:8px"><strong>沉淀：</strong>一直在给模型失误做兜底，本身就是"该换模型"的信号。</div>
+    </div>
+
+    <div class="item done">
+      <div class="t">决策点 4 · 交付验证机制（从能跑到可信）</div>
+      <div class="d"><strong>遇到：</strong>改完主流程后用户一点就崩——bug 藏在条件分支里，测试样本本地就判完了，走不到那行。</div>
+      <div class="d"><strong>怎么想：</strong>"我测过没问题"和"真的没问题"是两回事，单点测试覆盖不到分支。</div>
+      <div class="fix"><strong>怎么解：</strong>建命令行回归 + 5 条自动验收断言，每次改完跑全量，不靠肉眼。</div>
+      <div class="d" style="margin-top:8px"><strong>沉淀：</strong>交付物必须可验证——把需求变成可执行断言，比"看起来对"可靠得多。</div>
+    </div>
+
+    <div class="item done">
+      <div class="t">决策点 5 · 公网交付（交付经理的最后一公里）</div>
+      <div class="d"><strong>遇到：</strong>本地跑通后，GitHub Pages 只能放静态文件，跑不了后端、藏不住 key——页面能开，一点核验就降级演示模式。</div>
+      <div class="d"><strong>怎么想：</strong>"本地能跑 ≠ 交付完成"。客户场景的约束（网络、系统、安全）必须在方案里解决，不能甩给用户。</div>
+      <div class="fix"><strong>怎么解：</strong>部署到云服务器；遇到 Windows Server、下载源慢、无鉴权裸奔，逐一解决——换国内镜像、加访问口令、注册开机自启。</div>
+      <div class="d" style="margin-top:8px"><strong>沉淀：</strong>交付边界是"客户能用"。部署的每个约束都要当产品问题解决。</div>
     </div>
   </div>
 </section>
 
-<!-- ============ 6 复用 ============ -->
-<section id="s6">
-  <h2>06 / 可复用性</h2>
-  <div class="h2sub">这套骨架还能用在哪</div>
-
-  <p>这个项目的骨架其实是通用的：<strong>两份文本逐条比对 + 四态判定 + 带定位的输出</strong>。</p>
-
-  <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:36%">可迁移场景</th><th style="width:14%">相似度</th><th>需要改什么</th></tr>
-      <tr><td>合同条款比对（甲方/乙方版本）</td><td>高</td><td>状态改为 一致 / 偏向甲方 / 偏向乙方 / 缺失</td></tr>
-      <tr><td>需求文档 vs 开发交付物验收</td><td>高</td><td>状态改为 已实现 / 超出 / 未实现 / 待确认</td></tr>
-      <tr><td>竞品功能对比表</td><td>中</td><td>改为横向多列比对</td></tr>
-      <tr><td>供应商资质审核</td><td>中</td><td>加入证照有效期等规则校验</td></tr>
-      <tr><td>教学大纲 vs 教材内容覆盖度</td><td>中</td><td>状态改为 已覆盖 / 部分覆盖 / 未覆盖</td></tr>
-    </table>
-  </div>
-
-  <h3>可复用的三个组件</h3>
-  <div class="grid g3">
-    <div class="card">
-      <div class="h"><span class="num">1</span>分层判定框架</div>
-      <p>本地确定性规则 + 模型语义判断，冲突时规则优先。</p>
-    </div>
-    <div class="card">
-      <div class="h"><span class="num">2</span>序号同步机制</div>
-      <p>保留原文编号，保证结论可定位回原文。</p>
-    </div>
-    <div class="card">
-      <div class="h"><span class="num">3</span>验收断言脚本</div>
-      <p>把需求规格变成可执行断言。</p>
-    </div>
+<!-- ============ 5 方法论 ============ -->
+<section id="s5">
+  <h2>05 / 方法论</h2>
+  <div class="h2sub">可迁移的五条</div>
+  <div class="lessons">
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">需求要写成可验收规格，不是口头描述</div><div class="s">适用于任何产品与开发的协作，尤其是和 AI 协作</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">数据契约错了，改提示词没用</div><div class="s">所有 LLM 应用：模型输出形状 ≠ 业务需要形状时，重设计输出格式</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">把"不确定性"设计成一等公民，不假装确定</div><div class="s">判定类、审核类产品：诚实的不确定性优于看起来确定的错误</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">优化前先量瓶颈，别给错误的东西打补丁</div><div class="s">性能与成本优化：发现一直在兜底时，问题可能在别处</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">交付边界是"客户能用"，本地能跑不算完</div><div class="s">所有对外交付：部署约束要当产品问题闭环</div></div></div>
   </div>
 
   <h3>给不同听众的讲述重点</h3>
   <div class="tbl-wrap">
-    <table>
-      <tr><th style="width:130px">听众</th><th>重点讲</th><th style="width:100px">建议时长</th></tr>
-      <tr><td><strong>产品 / 业务</strong></td><td>1.2 痛点、2.2 四个设计决策、2.4 需求基线教训</td><td>15 分钟</td></tr>
-      <tr><td><strong>研发</strong></td><td>3.2 三个技术难点、3.3 性能三板斧、5.2 弯路二</td><td>20 分钟</td></tr>
-      <tr><td><strong>管理层</strong></td><td>0 摘要、4.1 量化结果、5.3 六条教训、6 可复用性</td><td>10 分钟</td></tr>
-      <tr><td><strong>全员分享</strong></td><td>摘要 → 痛点 → 四条弯路 → 六条教训</td><td>25 分钟</td></tr>
-    </table>
+  <table>
+    <thead><tr><th>听众</th><th>重点讲</th><th>时长</th></tr></thead>
+    <tbody>
+      <tr><td>产品 / 业务</td><td>一、痛点三笔账；六个决策；决策点 1、2</td><td>15 分钟</td></tr>
+      <tr><td>研发</td><td>产品结构；决策点 2、3、4</td><td>20 分钟</td></tr>
+      <tr><td>管理层</td><td>效果数据；决策点 5；五条方法论</td><td>10 分钟</td></tr>
+    </tbody>
+  </table>
   </div>
-
-  <div class="note good">
-    <strong>演示建议：</strong>现场用真实文件跑一次（45 秒出结果），比讲十页原理更有效。
-  </div>
+  <div class="note">演示建议：现场跑一次真实核验，比讲十页原理有效。</div>
 </section>
 
 <footer>
-  招投标参数核验工具 · 项目案例复盘 · 对应工具版本 v2.4 · 2026-11-25
+  招投标参数核验工具 · 项目复盘 &nbsp;|&nbsp; v2.7 · 2026-11-25 &nbsp;|&nbsp; 视角：产品经理 + 交付经理
 </footer>
 
 </main>
