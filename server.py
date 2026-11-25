@@ -197,8 +197,9 @@ if __name__ == "__main__":
     print(f"[bid-checker proxy] provider={PROVIDER} model={MODEL} verify_model={VERIFY_MODEL} thinking={THINKING or '-'} key_configured={configured} port={PORT}")
     if not configured:
         print("[bid-checker proxy] WARNING: .env 未配置 LLM_API_KEY，真实核验不可用（HTML 会走演示模式）")
-    print(f"[bid-checker proxy] 打开 http://localhost:{PORT}/index.html 使用工具")
-    with ReusableTCPServer(("127.0.0.1", PORT), Handler) as httpd:
+    print(f"[bid-checker proxy] 本机打开 http://localhost:{PORT}/index.html；外网访问请用 http://<服务器公网IP>:{PORT}/index.html")
+    print("[bid-checker proxy] 注意：监听 0.0.0.0 后，任何能访问该端口的人都能调用你的 API Key，务必用安全组限制来源 IP")
+    with ReusableTCPServer(("0.0.0.0", PORT), Handler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
