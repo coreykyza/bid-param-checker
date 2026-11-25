@@ -1,13 +1,15 @@
 # bid-param-checker one-click server update (v2.9.1+)
 # On the Windows server, paste ONE short line into PowerShell:
-#   iex (iwr 'https://raw.githubusercontent.com/coreykyza/bid-param-checker/main/tools/update-server.ps1' -UseBasicParsing).Content
+#   iex (iwr 'https://cdn.jsdelivr.net/gh/coreykyza/bid-param-checker@main/tools/update-server.ps1' -UseBasicParsing).Content
 #
 # Why this exists: pasting a long multi-line command into the PowerShell window
 # gets wrapped/truncated. This script is downloaded as a FILE first, then run,
 # so only the short one-liner above ever touches the console.
+# Why jsDelivr CDN: the Aliyun ECS in mainland China often hangs forever on
+# GitHub's raw domain. jsDelivr's CN nodes are reachable from mainland ECS.
 $ErrorActionPreference = 'Stop'
 $dir = 'C:\bidcheck'
-$base = 'https://raw.githubusercontent.com/coreykyza/bid-param-checker/main'
+$base = 'https://cdn.jsdelivr.net/gh/coreykyza/bid-param-checker@main'
 
 Write-Host '[1/5] Stopping old server...'
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
