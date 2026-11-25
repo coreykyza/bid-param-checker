@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* 单位知识库自测：不调模型，直接验数值裁决与换算说明。
+/* 单位知识库自测：不调模型，既验数值裁决，也验端到端装配。
    用法：node tools/单位换算自测.js                                   */
 const fs = require('fs');
 const path = require('path');
@@ -9,9 +9,10 @@ const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const js = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const NEEDED = [
-  'nums', 'normText', 'getFieldAlias', 'fieldNameOf', 'valueForField',
+  'nums', 'normText', 'splitItems', 'itemSame', 'scoreOverlap',
+  'isGroupHeading', 'isBareValue', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'getUnitTable', 'unitFactor', 'parseNumUnit', 'numWithUnit', 'valueWithUnitForField',
-  'numericVerdict', 'dirNote'
+  'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates'
 ];
 function pick(name) {
   const m = new RegExp('function ' + name + '\\(').exec(js);
@@ -25,10 +26,20 @@ function pick(name) {
 }
 const sandbox = { console, JSON, Math, Date, String, Number, Array, Object, RegExp, isNaN, parseFloat, parseInt };
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'data/hw-specs.js'), 'utf8'), sandbox);
+vm.runInContext(fs.readFileSync(path.join(ROOT, 'data/hw-matcher.js'), 'utf8'), sandbox);
+vm.runInContext('var localStorage={getItem:function(){return null},setItem:function(){}};', sandbox);
 vm.runInContext(NEEDED.map(pick).join('\n'), sandbox);
+vm.runInContext('loadHwSpecs();', sandbox);
 
+let pass = 0, fail = 0;
+function check(label, ok, detail) {
+  if (ok) { pass++; console.log('OK  ' + label + '  ' + detail); }
+  else { fail++; console.log('FAIL ' + label + '  ' + detail); }
+}
+
+/* ---------- 1. 函数级：数值裁决与换算说明 ---------- */
 const cases = [
-  // [招标原文, 投标响应, 期望方向, 期望理由片段(可选)]
   ['续航时间≥110min', '16小时', 'positive', '960min'],
   ['续航时间≥110min', '1小时', 'negative', '60min'],
   ['内存≥8GB', '8192MB', 'matched', ''],
@@ -44,16 +55,23 @@ const cases = [
   ['续航时间≥110min', '16GB', null, ''],
   ['存储≥1TB', '1000GB', 'negative', ''],
 ];
-
-let pass = 0, fail = 0;
 for (const [a, b, want, hint] of cases) {
   const v = sandbox.numericVerdict(a, b);
   const got = v ? v.dir : null;
   const note = v ? sandbox.dirNote(v.dir, v.av, v.bv, v) : '';
-  const okDir = got === want;
-  const okHint = !hint || note.includes(hint);
-  if (okDir && okHint) { pass++; console.log(`OK  ${a} | ${b} → ${got || '不裁决'}  ${note}`); }
-  else { fail++; console.log(`FAIL ${a} | ${b} → 期望${want || '不裁决'} 实得${got || '不裁决'} hint="${hint}" note="${note}"`); }
+  check(`${a} | ${b}`, got === want && (!hint || note.includes(hint)), `${got || '不裁决'} ${note}`);
 }
+
+/* ---------- 2. 端到端：无序号条目也要配上对 ---------- */
+const e2e = [
+  ['续航时间≥110min', '16小时', 'positive', '960min'],
+  ['续航时间≥110min', '续航16小时', 'positive', '960min'],
+  ['续航时间≥110min', '1小时', 'negative', '60min'],
+];
+for (const [a, b, wantStatus, hint] of e2e) {
+  const it = sandbox.buildItemStates({ row: 1, a, b }, { items: [] })[0];
+  check(`E2E ${a} | ${b}`, it.status === wantStatus && it.note.includes(hint), `${it.status} ${it.note} bText=${it.bText}`);
+}
+
 console.log(`\n通过 ${pass} / ${pass + fail}`);
 if (fail) process.exit(1);

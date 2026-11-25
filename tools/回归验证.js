@@ -30,7 +30,7 @@ const hwMatcher = fs.readFileSync(path.join(ROOT, 'data/hw-matcher.js'), 'utf8')
 // 只取需要的纯函数，避免执行 DOM 相关代码
 const NEEDED = [
   'normText', 'splitItems', 'nums', 'numWithUnit', 'itemSame', 'scoreOverlap',
-  'isGroupHeading', 'getFieldAlias', 'fieldNameOf', 'valueForField',
+  'isGroupHeading', 'isBareValue', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'getUnitTable', 'unitFactor', 'parseNumUnit', 'valueWithUnitForField',
   'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates',
   'itemSeqLabel', 'itemBody', 'detailLine', 'statLine', 'formatResult', 'isNeg'

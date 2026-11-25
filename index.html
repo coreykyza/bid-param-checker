@@ -342,6 +342,12 @@ function buildItemStates(p,g){
     //    这对多章节重复序号同样正确，且比文本相似度可靠得多；
     //    找不到时退回文本相似度。
     let bp=bItems.find(x=>it.seqRaw&&x.seqRaw===it.seqRaw&&x.seqOcc===it.seqOcc);
+    // 无序号条目（seqRaw 为空）：按同序号第几次出现配对，但必须有文本重叠或 B 是纯数值裸值，
+    // 否则两个不相干的独立行会被硬凑成一对（旧代码要求 seqRaw 非空，裸值永远配不上）。
+    if(!bp && !it.seqRaw){
+      bp=bItems.find(x=>!x.seqRaw&&x.seqOcc===it.seqOcc&&
+        (scoreOverlap(it.text,x.text)>=0.1||isBareValue(x.text)));
+    }
     if(!bp && bItems.length){
       let best=null,bestScore=0;
       bItems.forEach(x=>{ const s=scoreOverlap(it.text,x.text); if(s>bestScore){bestScore=s;best=x;} });
@@ -426,6 +432,8 @@ function scoreOverlap(a,b){
   let hit=0; grams.forEach(g=>{ if(nb.includes(g)) hit++; });
   return hit/grams.length;
 }
+// B 条目是否为「纯数值+单位」的裸值（如 "16小时"），这类没有字段名可对齐，只能靠同序配对。
+function isBareValue(t){ return /^\s*\d+(?:\.\d+)?\s*[\u4e00-\u9fa5A-Za-z%\/]{0,8}\s*$/.test(String(t||'')); }
 // 字段别名表：A 条目字段名 → B 中可能出现的写法（英文/简称/同义字段）
 function getFieldAlias(){ return {
   '内存':['内存','memory','ram','ddr','运存'],
