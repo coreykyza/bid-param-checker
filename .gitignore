@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+*.pyc
+__pycache__/
+output/*
+!output/.gitkeep
+tests/fixtures/*.xlsx
+logs/
+.DS_Store
+dist/
+.git.has_key_history/
+.git.*_history/
+node_modules/

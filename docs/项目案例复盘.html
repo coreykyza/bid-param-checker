@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>招投标参数核验工具 · 项目案例复盘</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#1a1f2e; --ink2:#4a5266; --muted:#8b93a7;
+  --line:#e4e7ee; --brand:#2b4a7d; --brand-l:#eef2f9;
+  --red:#c0392b; --red-bg:#fdeceb;
+  --green:#1e7d5a; --green-bg:#e8f5ef;
+  --amber:#a86a12; --amber-bg:#fdf4e3;
+  --blue:#2563a8; --blue-bg:#eaf1fa;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg); color:var(--ink); line-height:1.75; font-size:15px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{display:flex; max-width:1440px; margin:0 auto}
+
+/* 侧边导航 */
+aside{
+  width:220px; flex:0 0 220px; position:sticky; top:0; height:100vh;
+  padding:28px 16px; border-right:1px solid var(--line); background:#fbfcfd;
+}
+aside .brand{font-size:12px; color:var(--muted); letter-spacing:.08em; margin-bottom:18px}
+aside nav a{
+  display:block; padding:7px 10px; font-size:13px; color:var(--ink2);
+  text-decoration:none; border-radius:6px; margin-bottom:2px; border-left:2px solid transparent;
+}
+aside nav a:hover{background:var(--brand-l); color:var(--brand)}
+aside nav a.on{background:var(--brand-l); color:var(--brand); border-left-color:var(--brand); font-weight:600}
+aside .meta{margin-top:24px; padding-top:16px; border-top:1px solid var(--line); font-size:11px; color:var(--muted); line-height:1.9}
+
+main{flex:1; min-width:0; padding:0 48px 120px}
+
+/* 封面 */
+.hero{padding:72px 0 56px; border-bottom:1px solid var(--line)}
+.hero .tag{
+  display:inline-block; font-size:11px; letter-spacing:.1em; color:var(--brand);
+  background:var(--brand-l); padding:4px 12px; border-radius:99px; margin-bottom:20px;
+}
+.hero h1{font-size:38px; line-height:1.3; letter-spacing:-.01em; margin-bottom:16px; font-weight:700}
+.hero .sub{font-size:17px; color:var(--ink2); max-width:760px; margin-bottom:36px}
+.kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; max-width:860px}
+.kpi{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 16px}
+.kpi .n{font-size:26px; font-weight:700; color:var(--brand); letter-spacing:-.02em; line-height:1.2}
+.kpi .n small{font-size:13px; font-weight:500; color:var(--muted); margin-left:2px}
+.kpi .l{font-size:12px; color:var(--muted); margin-top:6px}
+
+/* 区块 */
+section{padding:56px 0 8px; scroll-margin-top:20px}
+h2{
+  font-size:13px; letter-spacing:.12em; color:var(--brand); font-weight:600;
+  margin-bottom:10px; text-transform:uppercase;
+}
+h2 + .h2sub{font-size:26px; font-weight:700; margin-bottom:28px; letter-spacing:-.01em}
+h3{font-size:17px; font-weight:650; margin:32px 0 12px; color:var(--ink)}
+p{margin-bottom:14px; color:var(--ink2)}
+strong{color:var(--ink); font-weight:650}
+
+/* 卡片网格 */
+.grid{display:grid; gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px}
+.card .h{font-size:14px; font-weight:650; margin-bottom:8px; display:flex; align-items:center; gap:8px}
+.card .h .num{
+  width:20px; height:20px; border-radius:5px; background:var(--brand); color:#fff;
+  font-size:11px; display:flex; align-items:center; justify-content:center; flex:0 0 20px;
+}
+.card p{font-size:13.5px; margin-bottom:8px}
+.card p:last-child{margin-bottom:0}
+
+/* 提示块 */
+.note{
+  border-left:3px solid var(--brand); background:var(--brand-l);
+  padding:16px 20px; border-radius:0 8px 8px 0; margin:20px 0; font-size:14px; color:var(--ink2);
+}
+.note strong{color:var(--brand)}
+.warn{border-left-color:var(--red); background:var(--red-bg)}
+.warn strong{color:var(--red)}
+.good{border-left-color:var(--green); background:var(--green-bg)}
+.good strong{color:var(--green)}
+
+/* 表格 */
+table{width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px}
+th{
+  text-align:left; padding:10px 12px; background:#f1f3f7; color:var(--ink2);
+  font-weight:600; font-size:12.5px; border-bottom:1px solid var(--line); white-space:nowrap;
+}
+td{padding:10px 12px; border-bottom:1px solid #f0f2f6; color:var(--ink2); vertical-align:top}
+tr:last-child td{border-bottom:none}
+td strong{color:var(--ink)}
+.tbl-wrap{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:16px 0}
+.tbl-wrap table{margin:0}
+
+/* 状态标签 */
+.pill{display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:99px; font-weight:600; white-space:nowrap}
+.p-ok{background:var(--green-bg); color:var(--green)}
+.p-bad{background:var(--red-bg); color:var(--red)}
+.p-unc{background:var(--amber-bg); color:var(--amber)}
+.p-pos{background:var(--blue-bg); color:var(--blue)}
+.p-que{background:#eef0f5; color:var(--muted); min-width:20px; text-align:center}
+
+/* 性能对比条 */
+.perf{margin:24px 0}
+.perf .row{display:grid; grid-template-columns:190px 1fr 90px; align-items:center; gap:14px; margin-bottom:12px}
+.perf .lab{font-size:13px; color:var(--ink2); text-align:right}
+.perf .bar{height:26px; background:#eef0f5; border-radius:5px; overflow:hidden; position:relative}
+.perf .fill{height:100%; border-radius:5px; display:flex; align-items:center; padding-left:10px;
+  font-size:11.5px; color:#fff; font-weight:600; white-space:nowrap}
+.perf .val{font-size:15px; font-weight:700; color:var(--ink)}
+.f1{background:linear-gradient(90deg,#9aa8c0,#7d8ca8)}
+.f2{background:linear-gradient(90deg,#d4a24c,#c08c2c)}
+.f3{background:linear-gradient(90deg,#3d7a5e,#1e7d5a)}
+
+/* 代码 */
+code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px;
+  background:#f1f3f7; padding:1.5px 6px; border-radius:4px; color:#b03a5b;
+}
+pre{
+  background:#1e2330; color:#d8dee9; padding:16px 18px; border-radius:9px;
+  overflow-x:auto; font-size:12.5px; line-height:1.75; margin:14px 0;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+pre code{background:none; padding:0; color:inherit; font-size:inherit}
+pre .c{color:#6b7688}
+pre .hl{color:#f0a868}
+
+/* 弯路时间线 */
+.tl{position:relative; padding-left:26px; margin:24px 0}
+.tl::before{content:''; position:absolute; left:7px; top:6px; bottom:6px; width:2px; background:var(--line)}
+.tl .item{position:relative; margin-bottom:26px}
+.tl .item::before{
+  content:''; position:absolute; left:-23px; top:6px; width:10px; height:10px;
+  border-radius:50%; background:#fff; border:2px solid var(--red);
+}
+.tl .item.done::before{border-color:var(--green)}
+.tl .t{font-size:14.5px; font-weight:650; margin-bottom:4px}
+.tl .d{font-size:13px; color:var(--ink2); margin-bottom:6px}
+.tl .fix{font-size:13px; color:var(--green); background:var(--green-bg); padding:8px 12px; border-radius:6px; display:inline-block}
+
+/* 教训列表 */
+.lessons{counter-reset:l}
+.lesson{
+  display:grid; grid-template-columns:32px 1fr; gap:14px; padding:16px 0;
+  border-bottom:1px solid var(--line); align-items:start;
+}
+.lesson:last-child{border-bottom:none}
+.lesson .i{
+  counter-increment:l; width:26px; height:26px; border-radius:7px; background:var(--brand-l);
+  color:var(--brand); font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center;
+}
+.lesson .i::before{content:counter(l)}
+.lesson .b .t{font-size:14.5px; font-weight:650; margin-bottom:3px}
+.lesson .b .s{font-size:13px; color:var(--ink2)}
+
+/* 页脚 */
+footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font-size:12px; color:var(--muted)}
+
+@media (max-width:1100px){
+  aside{display:none}
+  main{padding:0 24px 80px}
+  .kpis,.g2,.g3{grid-template-columns:1fr 1fr}
+  .hero h1{font-size:28px}
+  .perf .row{grid-template-columns:120px 1fr 70px}
+}
+@media (max-width:700px){
+  .kpis,.g2,.g3{grid-template-columns:1fr}
+  .hero h1{font-size:23px}
+  .perf .row{grid-template-columns:1fr; gap:6px}
+  .perf .lab{text-align:left}
+}
+@media print{
+  aside{display:none} main{padding:0} body{background:#fff}
+  section{page-break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<aside>
+  <div class="brand">CASE REVIEW</div>
+  <nav id="nav">
+    <a href="#s0" class="on">摘要</a>
+    <a href="#s1">1 · 项目背景</a>
+    <a href="#s2">2 · 产品方案</a>
+    <a href="#s3">3 · 实现路径</a>
+    <a href="#s4">4 · 产出结果</a>
+    <a href="#s5">5 · 项目复盘</a>
+    <a href="#s6">6 · 可复用性</a>
+  </nav>
+  <div class="meta">
+    v2.4 · 2026-11-25<br>
+    11 个版本 / 2 天<br>
+    2417 行代码
+  </div>
+</aside>
+
+<main>
+
+<!-- ============ 封面 ============ -->
+<div class="hero" id="s0">
+  <div class="tag">项目案例复盘</div>
+  <h1>招投标参数核验工具</h1>
+  <p class="sub">
+    把「244 个技术参数逐条人工比对」这件事，做成上传 Excel 就出带标红结论的本地工具。
+    两天 11 个版本迭代，从打补丁到架构重做。
+  </p>
+  <div class="kpis">
+    <div class="kpi"><div class="n">45<small>秒</small></div><div class="l">244 个参数点</div></div>
+    <div class="kpi"><div class="n">0<small>处</small></div><div class="l">模型漏判</div></div>
+    <div class="kpi"><div class="n">20<small>×</small></div><div class="l">换模型提速</div></div>
+    <div class="kpi"><div class="n">5<small>条</small></div><div class="l">自动验收全过</div></div>
+  </div>
+</div>
+
+<!-- ============ 1 背景 ============ -->
+<section id="s1">
+  <h2>01 / 项目背景</h2>
+  <div class="h2sub">一个规则明确、但极其耗人的活</div>
+
+  <p>设备采购评标时，需要把招标文件的技术参数要求（A 列）和投标方的技术响应（B 列）逐条比对。真实文件是 <strong>28 行、244 个参数点</strong>，每行 A 列还是一段含多层编号的长文本。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:46%">招标要求（A 列）</th><th style="width:30%">投标响应（B 列）</th><th>核验结论</th></tr>
+      <tr><td>1、处理器：≥6核12线程，主频≥2.3GHz，睿频≥3.8GHz，TDP≤35W（性能不低于 i5-10500T）</td><td>1、处理器：i5-14500</td><td><span class="pill p-que">?</span></td></tr>
+      <tr><td>2、内存：≥8GB DDR4</td><td>2、内存：16GB DDR4</td><td><span class="pill p-que">?</span></td></tr>
+      <tr><td>3、积木种类≥90种，积木数量≥900块</td><td>3、组件种类不少于40种，数量不少于323个</td><td><span class="pill p-que">?</span></td></tr>
+    </table>
+  </div>
+
+  <h3>人工做法的三个痛点</h3>
+  <div class="grid g3">
+    <div class="card">
+      <div class="h"><span class="num">1</span>慢且枯燥</div>
+      <p>244 个参数点，一条平均 30 秒就是 2 小时；熟练的人也要 40 分钟以上。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">2</span>容易看漏</div>
+      <p>最危险的不是判错，是<strong>跳过去了没发现</strong>。要求"支持声纹识别"，响应里压根没提，人眼一扫就默认有了。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">3</span>标准不统一</div>
+      <p>要求≥6自由度、响应9自由度，有人判满足有人判不一致；要求不低于 i5-10500T、响应 i5-14500，不懂硬件根本判不了。</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>为什么值得做：</strong>规则明确可自动化（不是开放式创作）、高频重复（每次采购都要做）、错了代价高（漏判负偏离会导致验收扯皮甚至采购损失）。
+  </div>
+</section>
+
+<!-- ============ 2 方案 ============ -->
+<section id="s2">
+  <h2>02 / 产品方案</h2>
+  <div class="h2sub">四个设计决策撑起整个骨架</div>
+
+  <p>上传招标/投标对照 Excel → 逐条判定每条参数状态 → 输出带结论、明细、标红的核验报告。看似简单，但有四个决定成败的决策。</p>
+
+  <h3>决策一 · 逐条四态判定，而不是"只报问题"</h3>
+  <div class="grid g2">
+    <div class="card" style="border-color:#f0c4c0">
+      <div class="h" style="color:var(--red)">✗ 错误做法（v1.x 犯过）</div>
+      <p>只让模型输出"有问题的条目"，满足的不管。</p>
+      <p><strong>后果：</strong>满足项被丢弃后，靠"总数 − 问题数"反推的满足数<strong>不可信</strong>。实际出过事故：模型报「共 10 项」，却列出 28 条问题。</p>
+    </div>
+    <div class="card" style="border-color:#b8dfcd">
+      <div class="h" style="color:var(--green)">✓ 正确做法</div>
+      <p>模型必须对<strong>每一条</strong>输出状态，四选一。核心约束：<strong>四个状态之和恒等于条目总数</strong>。</p>
+      <p>这条约束让所有统计天然自洽，不需要事后"修数字"。</p>
+    </div>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:120px">状态</th><th>含义</th><th style="width:26%">示例</th></tr>
+      <tr><td><span class="pill p-ok">匹配</span></td><td>响应满足要求（含等于阈值）</td><td>要求≥8GB，响应8GB</td></tr>
+      <tr><td><span class="pill p-pos">正偏离</span></td><td>响应<strong>明确优于</strong>要求</td><td>要求≥8GB，响应16GB</td></tr>
+      <tr><td><span class="pill p-bad">负偏离</span></td><td>响应低于 / 不满足要求</td><td>要求≥90种，响应40种</td></tr>
+      <tr><td><span class="pill p-unc">待确认</span></td><td>投标里找不到对应内容，或表述含糊</td><td>要求声纹识别，响应未提及</td></tr>
+    </table>
+  </div>
+
+  <h3>决策二 · 序号严格同步招标原文</h3>
+  <p>招标原文是多层编号的：</p>
+  <pre><code>一、脑电波采集交互
+1.采集方式：佩戴设备
+2.实时采集信号
+二、手势识别交互
+1.采集方式：屏幕绘制</code></pre>
+  <p>结论里必须原样输出 <code>【1.】</code>、<code>【二、1】</code>、<code>【（3）】</code>，<strong>不重新编号</strong>。</p>
+  <div class="note">
+    <strong>为什么这是关键：</strong>用户拿着结论回 Excel 找原文，靠的就是序号。如果我自己造"第1项、第2项"，用户根本对不上。多章节场景下四个章节都有"1."，重编号必然混乱。
+  </div>
+
+  <h3>决策三 · 汇总只有两档，明细只列问题</h3>
+  <p>汇总：<strong>全部满足 / 部分满足</strong>，没有第三档。明细：<strong>只列负偏离和待确认</strong>，不列匹配和正偏离。</p>
+  <p>因为工具的定位是"<strong>找出需要人处理的地方</strong>"，不是"写一份完整报告"。用户扫一眼 C 列，只想知道：这行有没有问题、问题在哪。</p>
+  <pre><code>部分满足｜共17项：负偏离6/待确认10/匹配0/正偏离1
+
+负偏离：
+  1、【2、】存储不低于16GB，支持SD卡。->仅4M flash/224K RAM，远低于16GB且未提SD卡
+  2、【3、】主控器配备不小于4英寸触摸屏。->响应128*64LCD屏，远小于4英寸触摸屏
+
+待确认：
+  1、摄像头像素300w->投标参数中未找到对应内容，置信度0.5</code></pre>
+
+  <h3>决策四 · 标红只标招标列</h3>
+  <p><strong>最初做法</strong>：把 C 列结论整格标红 → 红色满屏，反而看不出重点。用户要看的是"招标要求里哪一条有问题"，不是"哪一行有问题"。</p>
+  <p><strong>最终做法</strong>：只把 A 列中负偏离/待确认的<strong>那几段文字</strong>标红加粗，C 列不整格红。</p>
+
+  <div class="note warn">
+    <strong>这个决策带来一个硬技术难点：</strong>Excel 一个单元格内的局部文字变色，需要写富文本（rich text runs）。普通导出库只支持整格样式，做不到。解法见下一节。
+  </div>
+
+  <h3>最大的产品教训 · 需求必须写成可验收的规格</h3>
+  <p>v1.x 阶段我是<strong>靠用户发截图反馈</strong>迭代的：说这里不对，我修一下，再等下一张。修了四轮，用户评价"<strong>质量很差</strong>"。</p>
+  <p>转折点是用户自己手写了一份需求文档，写清了：每个条目独立判定、统计口径、序号同步原文、汇总两档、明细只列问题、标红的是招标列。</p>
+  <div class="note good">
+    <strong>拿到文档后我做的第一件事不是改代码，而是逐条比对现有实现，判定"结构不匹配，必须重做"。</strong><br><br>
+    产品经理的价值不在于提需求，而在于把需求写成可验收的规格。用户脑子里清楚"序号要同步原文"，但前四轮从没说过，因为觉得"这不是显然的吗"。恰恰是这些"显然的细节"，决定了工具能不能用。
+  </div>
+</section>
+
+<!-- ============ 3 实现 ============ -->
+<section id="s3">
+  <h2>03 / 实现路径</h2>
+  <div class="h2sub">三个技术难点 + 三板斧提速</div>
+
+  <h3>技术选型</h3>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:100px">层</th><th style="width:38%">选择</th><th>为什么</th></tr>
+      <tr><td>前端</td><td>单页 HTML（1217 行，无框架）</td><td>产品经理要能自己启动、自己改。不需要构建工具</td></tr>
+      <tr><td>后端</td><td>Python 标准库 HTTP 服务（200 行）</td><td>只做两件事：托管静态文件 + 转发 LLM 请求（藏住 key）</td></tr>
+      <tr><td>模型</td><td>火山引擎 Ark · DeepSeek V4.1 Flash</td><td>换模型是最大的性能杠杆（后面详述）</td></tr>
+      <tr><td>Excel</td><td>SheetJS（读）+ JSZip（后处理富文本）</td><td>局部标红需要绕过库的限制</td></tr>
+      <tr><td>部署</td><td>本地运行，双击 <code>.command</code></td><td>数据敏感（招投标文件），不出内网</td></tr>
+    </table>
+  </div>
+
+  <h3>难点一 · 单元格内局部文字标红</h3>
+  <p><strong>问题</strong>：SheetJS 只能读富文本、<strong>不能写</strong>（写进去得到空值）。Excel 的"一格内部分文字变色"需要 <code>&lt;is&gt;&lt;r&gt;&lt;rPr&gt;</code> 这样的富文本 XML。</p>
+  <pre><code><span class="c">// 正常导出 xlsx → 用 JSZip 打开 → 直接改 sheet XML</span>
+&lt;c r="A15" s="4" t="inlineStr"&gt;
+  &lt;is&gt;
+    &lt;r&gt;&lt;rPr&gt;...正常样式...&lt;/rPr&gt;&lt;t&gt;前面的文字&lt;/t&gt;&lt;/r&gt;
+<span class="hl">    &lt;r&gt;&lt;rPr&gt;&lt;color rgb="FFFF0000"/&gt;&lt;b/&gt;&lt;/rPr&gt;&lt;t&gt;要标红的文字&lt;/t&gt;&lt;/r&gt;</span>
+  &lt;/is&gt;
+&lt;/c&gt;</code></pre>
+  <div class="note warn">
+    <strong>踩的坑：</strong>读单元格文本时，部分原文件的 <code>c.r</code> 是<strong>原始 XML 字符串</strong>（<code>&lt;t&gt;...&amp;#10;...</code>），直接当文本用会污染标红内容。必须优先取 <code>c.v</code>。
+  </div>
+
+  <h3>难点二 · 给条目找对「对应的投标内容」</h3>
+  <p>这是整个项目<strong>最容易错、也最影响准确率</strong>的地方。场景：A 列第 3 条要求「积木种类≥90种」，B 列里哪一条是它的响应？</p>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:30%">试过的方法</th><th>为什么不行</th></tr>
+      <tr><td>按序号匹配</td><td>多章节场景下 A 有 4 个"1."，B 也有 4 个，全对错了</td></tr>
+      <tr><td>按文本相似度</td><td>长词分词放大数值差异，"≥8GB" vs "16GB" 相似度不足 0.5，找不到对应条目 → 数值判断根本没机会跑</td></tr>
+      <tr><td>按位置</td><td>A/B 条目数经常不相等（B 可能合并或拆分），位置对不上</td></tr>
+    </table>
+  </div>
+  <p><strong>最终解法：序号 + 同序号出现次序</strong></p>
+  <pre><code>A 的第 1 个 "1."  →  B 的第 1 个 "1."
+A 的第 2 个 "1."  →  B 的第 2 个 "1."</code></pre>
+  <p>同时把文本相似度从「长词命中率」改成 <strong>2-gram 滑窗命中率</strong>做兜底。效果：<code>不少于6自由度</code> vs <code>9自由度（颈部6+机身1+天线2）</code> 从"匹配失败"变成"正确判正偏离"。</p>
+  <div class="note warn">
+    <strong>全场最重要的技术教训：</strong>"找对应关系"比"做判断"更容易出错。找错对象时，后面所有数值比较、文本一致性判断全部建立在错误基础上，答案必然错，而且错得毫无征兆。
+  </div>
+
+  <h3>难点三 · 型号参数需要外部知识</h3>
+  <p><strong>问题</strong>：要求「≥6核12线程（性能不低于 i5-10500T）」，响应「i5-14500」。模型不知道这两颗 CPU 谁强，判成了"负偏离"。</p>
+  <p><strong>解法</strong>：建本地型号参数库 —— 101 个内置型号（Intel 8~14 代、AMD、NVIDIA、树莓派），字段含核数/线程/频率/功耗/显存。</p>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:38%">关键设计决策</th><th>原因</th></tr>
+      <tr><td>型号之间<strong>只比核数/线程/睿频，不比基础频率</strong></td><td>i5-14500 基础频率 2.5，<strong>反而低于</strong> i5-10500T 的 2.9，但它是 14 核。比基础频率会得出"14500 更差"的荒谬结论</td></tr>
+      <tr><td>点名"性能不低于 X 型号"时，<strong>功耗不参与</strong></td><td>i5-14500 是 65W，会撞上招标的"TDP≤35W"被判负偏离，但它性能远超。点名对标型号时用的是"性能档位"语义，不是散热约束</td></tr>
+      <tr><td>投标<strong>没给型号时判待确认</strong></td><td>不知道就是不知道，让人工去核，不能瞎判</td></tr>
+    </table>
+  </div>
+  <div class="note good">
+    <strong>结果：</strong>i5-14500 那条从「负偏离：低于 i5-10500T」变成「<strong>正偏离</strong>：核数 14vs6、线程数 20vs12、睿频 4.9vs4.3」。
+  </div>
+
+  <h3>性能三板斧：264 秒 → 6.6 秒</h3>
+  <div class="perf">
+    <div class="row">
+      <div class="lab">v2.1 基线</div>
+      <div class="bar"><div class="fill f1" style="width:100%">全量送模型，串行</div></div>
+      <div class="val">264s</div>
+    </div>
+    <div class="row">
+      <div class="lab">v2.2 本地预判 + 并发</div>
+      <div class="bar"><div class="fill f2" style="width:53%">60% 本地判 + 并发</div></div>
+      <div class="val">141s</div>
+    </div>
+    <div class="row">
+      <div class="lab">v2.3 换 DeepSeek</div>
+      <div class="bar"><div class="fill f3" style="width:3%"></div></div>
+      <div class="val">6.6s</div>
+    </div>
+  </div>
+
+  <div class="grid g3">
+    <div class="card">
+      <div class="h"><span class="num">1</span>本地预判</div>
+      <p>文本完全一致、单阈值数值比对、型号库能查、B 列找不到 → 四类本地直接判。</p>
+      <p><strong>147/243 条（60%）</strong>不送 AI。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">2</span>只送待判 + 并发</div>
+      <p>按片（8 条）并发，界面可调并发数，实测 8 最快。</p>
+      <p>补漏要<strong>按行聚合</strong>重试，不能按单条 —— 只发一条时模型缺上下文会宽松判成匹配。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">3</span>换模型</div>
+      <p>141s → <strong>6.6s</strong>，漏返回 15 处 → <strong>0 处</strong>，多阈值条目从判错变判对。</p>
+      <p>耗时降到 1/20，<strong>准确率还提升了</strong>。</p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <strong>最大的反思：</strong>v2.1→v2.2 我花大功夫做工程优化（本地预判、并发、补漏），264s 压到 141s 觉得挺满意。但换模型一步就把 141s 压到 6.6s。<br><br>
+    当你发现自己在反复给模型的能力不足打补丁时，先问问是不是选错了模型。
+  </div>
+
+  <h3>工程配套 · 让 AI 能自证</h3>
+  <p>这个项目有个特殊约束：<strong>我没有图形界面可以点</strong>，每次验证都要重启服务 + 开浏览器 + 等几分钟。所以做了套命令行工具链，不依赖浏览器就能跑完整链路。</p>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:34%">工具</th><th>作用</th></tr>
+      <tr><td><code>tools/xlsx转json.py</code></td><td>源表 → JSON（含脏数据过滤）</td></tr>
+      <tr><td><code>tools/回归验证.js</code></td><td>命令行跑完整判定链路，5 分钟跑完 28 行</td></tr>
+      <tr><td><code>tools/生成结果Excel.py</code></td><td>JSON → 带格式和标红的 xlsx</td></tr>
+      <tr><td><code>tools/验收检查.py</code></td><td><strong>5 条验收标准自动核对</strong></td></tr>
+    </table>
+  </div>
+  <p><strong>验收脚本是关键</strong>：它把"需求文档"变成了可执行断言 ——</p>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:80px">验收</th><th>断言</th></tr>
+      <tr><td>验收1</td><td>统计数字自洽（四数之和 == 条目总数）</td></tr>
+      <tr><td>验收2</td><td>统计数字 == 明细行数</td></tr>
+      <tr><td>验收3</td><td>序号严格同步招标原文</td></tr>
+      <tr><td>验收4</td><td>A 列标红行数 == C 列"部分满足"行数</td></tr>
+      <tr><td>验收5</td><td>"全部满足"行不出现明细</td></tr>
+    </table>
+  </div>
+  <div class="note">
+    每次改完代码跑一遍，<strong>不靠肉眼判断"应该没问题"</strong>。
+  </div>
+</section>
+
+<!-- ============ 4 结果 ============ -->
+<section id="s4">
+  <h2>04 / 产出结果</h2>
+  <div class="h2sub">不是"跑通了"，是逐条核对过对错</div>
+
+  <h3>量化指标</h3>
+  <div class="grid g3">
+    <div class="card"><div class="h">处理规模</div><p><strong style="font-size:20px">28 行 / 244 个</strong><br>招投标参数点</p></div>
+    <div class="card"><div class="h">耗时</div><p><strong style="font-size:20px">45 秒</strong>（浏览器并发 8）<br><strong>6.6 秒</strong>（命令行）</p></div>
+    <div class="card"><div class="h">稳定性</div><p>失败行 <strong>0</strong><br>模型漏返回 <strong>0</strong> 处</p></div>
+    <div class="card"><div class="h">统计自洽</div><p><strong style="font-size:20px">100%</strong><br>244 = 匹配+正偏离+负偏离+待确认</p></div>
+    <div class="card"><div class="h">自动验收</div><p><strong style="font-size:20px">5 / 5</strong><br>断言全部通过</p></div>
+    <div class="card"><div class="h">标红准确</div><p>9 处标红<br>== 9 行部分满足，完全一致</p></div>
+  </div>
+
+  <h3>准确率验证（关键案例逐条核对）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:18%">案例</th><th style="width:26%">招标要求</th><th style="width:20%">投标响应</th><th style="width:16%">正确结论</th><th>工具结论</th></tr>
+      <tr><td>数值超标</td><td>内存≥8GB</td><td>16GB</td><td>正偏离</td><td><span class="pill p-ok">✓ 正偏离</span></td></tr>
+      <tr><td>数值不足</td><td>积木≥90种 / ≥900块</td><td>40种 / 323块</td><td>负偏离</td><td><span class="pill p-ok">✓ 负偏离</span>（带具体数字）</td></tr>
+      <tr><td>型号对比</td><td>不低于 i5-10500T</td><td>i5-14500</td><td>正偏离</td><td><span class="pill p-ok">✓ 正偏离</span>（核数14vs6）</td></tr>
+      <tr><td>单位不可比</td><td>使用时间≥110min</td><td>电池续航16小时</td><td>待确认</td><td><span class="pill p-ok">✓ 不硬比</span>（单位不同）</td></tr>
+      <tr><td>缺项</td><td>支持 VoiceID 声纹</td><td>未提及</td><td>待确认</td><td><span class="pill p-ok">✓ 待确认</span></td></tr>
+      <tr><td>原文照抄</td><td>支持人脸识别</td><td>支持人脸识别</td><td>匹配</td><td><span class="pill p-ok">✓ 匹配</span></td></tr>
+    </table>
+  </div>
+  <div class="note">
+    <strong>最后两行最容易判错</strong>：模型倾向于把"找不到对应内容"判成"负偏离"。需求明确写了这种情况是待确认，所以在前端加了硬规则 ——
+    负偏离理由里出现"未提及/未提供/未找到"自动改判待确认；<strong>但</strong>如果有"不足/低于/未达到"（明确不满足），保持负偏离。
+  </div>
+
+  <h3>交付物结构</h3>
+  <pre><code>bid-param-checker/
+├── index.html              <span class="c">前端全部逻辑（1217 行）</span>
+├── server.py               <span class="c">本地代理（200 行，藏 key）</span>
+├── data/
+│   ├── hw-specs.js         <span class="c">型号参数库（101 个）</span>
+│   └── hw-matcher.js       <span class="c">型号匹配与裁决</span>
+├── tools/                  <span class="c">命令行工具链（4 个）</span>
+├── docs/
+│   ├── 01-需求基线.md      <span class="c">← 开发验收的唯一依据</span>
+│   └── 02-测试用例.md
+├── CHANGELOG.md            <span class="c">11 个版本的完整记录</span>
+├── 启动工具.command         <span class="c">双击启动（自带看门狗）</span>
+└── 安装自启服务.command     <span class="c">launchd 守护</span></code></pre>
+</section>
+
+<!-- ============ 5 复盘 ============ -->
+<section id="s5">
+  <h2>05 / 项目复盘</h2>
+  <div class="h2sub">最有价值的部分：四条弯路</div>
+
+  <h3>先看做对了什么</h3>
+  <div class="grid g2">
+    <div class="card">
+      <div class="h">判定权分层：规则优先，模型兜底</div>
+      <p>不确定的规则（数值大小、型号性能、文本完全一致）全部放前端代码，只有"需要语义理解"的才交给模型。</p>
+      <p>结果：模型即使判错，也会被本地规则纠正。这解释了为什么换模型前后关键案例都判得对。</p>
+    </div>
+    <div class="card">
+      <div class="h">加了自动验收，不靠肉眼</div>
+      <p>5 条断言覆盖了最容易出错的统计一致性和格式同步。</p>
+      <p>v2.0 之后没再出现"统计不自洽"这类低级问题。</p>
+    </div>
+    <div class="card">
+      <div class="h">需求文档化后才动手</div>
+      <p>虽然是被"骂"出来的，但拿到手写需求后重做的效率，远高于之前四轮散点修补。</p>
+    </div>
+    <div class="card">
+      <div class="h">把踩坑原因写进代码注释</div>
+      <p>比如「这里要用 pre 不能用 rows」「型号对比不比基础频率」。</p>
+      <p><strong>原因：</strong>项目大量依赖 AI 辅助编码，而 AI 每次对话都是失忆的。不写下来，下次同样会犯。</p>
+    </div>
+  </div>
+
+  <h3>四条弯路</h3>
+  <div class="tl">
+    <div class="item">
+      <div class="t">弯路一 · 给模型的错误打补丁，越打越歪（v1.0 → v1.4）</div>
+      <div class="d">
+        现象：用户说"这条判错了" → 加条规则 → 下次另一条又错 → 再加规则。四轮下来修了数值方向、二级序号、局部高亮、正偏离误报。<br><br>
+        <strong>根本问题不是某条规则不对，是数据契约错了。</strong>v1.x 让模型"只报有问题的条目"，满足项被丢掉，前端靠"总数 − 问题数"反推满足数。这个设计从第一天就不可能自洽。
+      </div>
+      <div class="fix">用户手写需求文档 → 逐条比对现有实现 → 判定"结构不匹配，必须重做" → v2.0 输出契约改成"每条都必须给状态"</div>
+    </div>
+    <div class="item">
+      <div class="t">弯路二 · 只跑单行就宣布"修好了"（v2.4 翻车）</div>
+      <div class="d">
+        v2.2 加进度提示时写了 <code>rows.reduce((s,r) =&gt; s + r.items.filter(...))</code>。但 <code>rows</code> 是原始行，没有 <code>items</code> 字段。用户一点核验就崩。<br><br>
+        为什么没发现：这行在 <code>if (jobs.length)</code> 里面，只有"存在需要送 AI 的条目"才执行。我测试的样本本地就判完了，走不到这行。
+      </div>
+      <div class="fix">改主流程后必须跑全量。另外异步主流程应默认包 try/finally 复位 UI —— 这次出错后按钮永久锁死，只能刷新页面，是二次伤害</div>
+    </div>
+    <div class="item">
+      <div class="t">弯路三 · 把工程优化当成了主要矛盾（v2.2）</div>
+      <div class="d">
+        花不少功夫做本地预判、并发池、补漏机制，264s → 141s，觉得挺满意。<br><br>
+        真相：换个模型 141s → 6.6s，而且准确率还提升了（漏返回 15 → 0）。
+      </div>
+      <div class="fix">优化之前先量瓶颈在哪。这次瓶颈根本不在我的代码里，在模型。不断给模型失误做兜底逻辑，本身就是"该换模型"的信号</div>
+    </div>
+    <div class="item">
+      <div class="t">弯路四 · 型号对比一开始比了基础频率</div>
+      <div class="d">
+        i5-14500（基础 2.5GHz）被判"不如" i5-10500T（2.9GHz），但它其实是 14 核的新一代。
+      </div>
+      <div class="fix">建参数库时，字段可比性要逐个确认。同类产品的不同定位（桌面/移动、标压/低压），有些指标天然不可横向比较</div>
+    </div>
+  </div>
+
+  <h3>六条可迁移的教训</h3>
+  <div class="lessons">
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">数据契约错了，改提示词没用</div><div class="s">任何 LLM 应用。模型输出形状 ≠ 业务需要形状时，重设计输出格式</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">确定性规则放代码，语义判断放模型</div><div class="s">数值、格式、型号这类有标准的，别指望模型</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">"找对应关系"比"做判断"更易出错</div><div class="s">表对表比对、记录匹配、实体对齐类需求</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">换模型 &gt; 调工程</div><div class="s">发现自己一直在给模型的错兜底时</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">需求要写成可验收的规格，不是口头描述</div><div class="s">产品与开发的协作，尤其是和 AI 协作</div></div></div>
+    <div class="lesson"><div class="i"></div><div class="b"><div class="t">改主流程必须跑全量验证</div><div class="s">任何交付前的最后一道关</div></div></div>
+  </div>
+
+  <h3>如果重来一次</h3>
+  <div class="grid g2">
+    <div class="card" style="border-color:#b8dfcd">
+      <div class="h" style="color:var(--green)">会提前做的三件事</div>
+      <p><strong>1. 第一天就要一份书面需求基线</strong><br>成本：用户多花 1 小时写文档。收益：省掉四轮返工。</p>
+      <p><strong>2. 第一天就搭自动验收脚本</strong><br>v2.0 之后才有，但那之后没再出现统计不自洽这类低级问题。</p>
+      <p><strong>3. 先用最强模型跑通，再考虑降本</strong><br>一开始用免费模型省成本，结果大量时间花在跟模型能力不足搏斗。</p>
+    </div>
+    <div class="card" style="border-color:#c9d6e8">
+      <div class="h" style="color:var(--brand)">会保持不变的两件事</div>
+      <p><strong>1. 判定权分层</strong>（规则优先、模型兜底）<br>这是准确率的根基。</p>
+      <p><strong>2. 输出格式严格遵守规格</strong>（序号同步原文、两档汇总、只标 A 列）<br>这是它"能用"而不是"看起来能用"的原因。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 复用 ============ -->
+<section id="s6">
+  <h2>06 / 可复用性</h2>
+  <div class="h2sub">这套骨架还能用在哪</div>
+
+  <p>这个项目的骨架其实是通用的：<strong>两份文本逐条比对 + 四态判定 + 带定位的输出</strong>。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:36%">可迁移场景</th><th style="width:14%">相似度</th><th>需要改什么</th></tr>
+      <tr><td>合同条款比对（甲方/乙方版本）</td><td>高</td><td>状态改为 一致 / 偏向甲方 / 偏向乙方 / 缺失</td></tr>
+      <tr><td>需求文档 vs 开发交付物验收</td><td>高</td><td>状态改为 已实现 / 超出 / 未实现 / 待确认</td></tr>
+      <tr><td>竞品功能对比表</td><td>中</td><td>改为横向多列比对</td></tr>
+      <tr><td>供应商资质审核</td><td>中</td><td>加入证照有效期等规则校验</td></tr>
+      <tr><td>教学大纲 vs 教材内容覆盖度</td><td>中</td><td>状态改为 已覆盖 / 部分覆盖 / 未覆盖</td></tr>
+    </table>
+  </div>
+
+  <h3>可复用的三个组件</h3>
+  <div class="grid g3">
+    <div class="card">
+      <div class="h"><span class="num">1</span>分层判定框架</div>
+      <p>本地确定性规则 + 模型语义判断，冲突时规则优先。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">2</span>序号同步机制</div>
+      <p>保留原文编号，保证结论可定位回原文。</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="num">3</span>验收断言脚本</div>
+      <p>把需求规格变成可执行断言。</p>
+    </div>
+  </div>
+
+  <h3>给不同听众的讲述重点</h3>
+  <div class="tbl-wrap">
+    <table>
+      <tr><th style="width:130px">听众</th><th>重点讲</th><th style="width:100px">建议时长</th></tr>
+      <tr><td><strong>产品 / 业务</strong></td><td>1.2 痛点、2.2 四个设计决策、2.4 需求基线教训</td><td>15 分钟</td></tr>
+      <tr><td><strong>研发</strong></td><td>3.2 三个技术难点、3.3 性能三板斧、5.2 弯路二</td><td>20 分钟</td></tr>
+      <tr><td><strong>管理层</strong></td><td>0 摘要、4.1 量化结果、5.3 六条教训、6 可复用性</td><td>10 分钟</td></tr>
+      <tr><td><strong>全员分享</strong></td><td>摘要 → 痛点 → 四条弯路 → 六条教训</td><td>25 分钟</td></tr>
+    </table>
+  </div>
+
+  <div class="note good">
+    <strong>演示建议：</strong>现场用真实文件跑一次（45 秒出结果），比讲十页原理更有效。
+  </div>
+</section>
+
+<footer>
+  招投标参数核验工具 · 项目案例复盘 · 对应工具版本 v2.4 · 2026-11-25
+</footer>
+
+</main>
+</div>
+
+<script>
+// 滚动高亮当前章节
+const links=[...document.querySelectorAll('#nav a')];
+const secs=links.map(a=>document.querySelector(a.getAttribute('href'))).filter(Boolean);
+const onScroll=()=>{
+  const y=window.scrollY+120;
+  let cur=0;
+  secs.forEach((s,i)=>{ if(s && s.offsetTop<=y) cur=i; });
+  links.forEach((a,i)=>a.classList.toggle('on',i===cur));
+};
+window.addEventListener('scroll',onScroll,{passive:true});
+onScroll();
+</script>
+</body>
+</html>
