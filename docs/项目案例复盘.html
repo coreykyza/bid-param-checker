@@ -314,7 +314,7 @@ footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font
     <tbody>
       <tr><td>数值优于要求</td><td>要求 ≥X，响应 &gt;X</td><td><span class="pill p-pos">正偏离</span></td><td>数值方向裁决</td></tr>
       <tr><td>数值低于要求</td><td>要求 ≥X，响应 &lt;X</td><td><span class="pill p-bad">负偏离</span></td><td>带具体数字说明差多少</td></tr>
-      <tr><td>单位不可比</td><td>要求 min，响应"小时"</td><td><span class="pill p-unc">待确认</span></td><td>单位不同不硬比，交人工</td></tr>
+      <tr><td>单位不一致</td><td>要求 min，响应"小时"</td><td><span class="pill p-pos">换算后裁决</span></td><td>基础单位知识库，换算到同一基准再比</td></tr>
       <tr><td>型号性能对标</td><td>"不低于 A 型号" vs B 型号</td><td><span class="pill p-que">库裁决</span></td><td>比核数/线程/睿频，不比基础频率，功耗不参与</td></tr>
       <tr><td>缺项 / 分组标题</td><td>响应未提；或"硬件参数"大标题</td><td><span class="pill p-unc">待确认/过滤</span></td><td>不把标题当条目，不把缺项当满足</td></tr>
     </tbody>
@@ -325,7 +325,7 @@ footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line); font
     <strong>案例 A · 型号对标反直觉：</strong>点名"性能不低于 A 型号"时，B 型号基础频率反而更低，但它是更新代、核心翻倍。按"数字大的更好"会判成负偏离——错的。产品上把"型号对标"单独定义成场景，明确"比代际和核心规格、不比单一频率、功耗不参与"，并把参数库作为产品能力内置。这类判断靠提示词说不清，必须靠产品规则 + 数据。
   </div>
   <div class="note good">
-    <strong>案例 B · 单位不可比的克制：</strong>要求"续航≥110min"，响应"16小时"。数字上 16&lt;110 看似负偏离，但单位不同根本不能比。工具判"待确认"并说明原因。一个诚实的确定性，比一个看起来确定的错误答案更有价值。
+    <strong>案例 B · 单位不一致不能偷懒：</strong>要求"续航≥110min"，响应"16小时"。早期因单位不同直接判"待确认"，被用户当场否掉——本该工具做掉的换算甩给了人。现内置基础单位知识库（时间/存储/频率/功率/长度/重量/电量/网速等），换算到同一基准再比，结论写"响应16小时=960min，优于要求的110min"。边界守住：库里没有的单位（如 TFLOPS）仍不瞎判，保持待确认。该算的算，不该算的别装懂。
   </div>
 
   <h3>交付形态</h3>

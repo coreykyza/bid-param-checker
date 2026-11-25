@@ -31,6 +31,7 @@ const hwMatcher = fs.readFileSync(path.join(ROOT, 'data/hw-matcher.js'), 'utf8')
 const NEEDED = [
   'normText', 'splitItems', 'nums', 'numWithUnit', 'itemSame', 'scoreOverlap',
   'isGroupHeading', 'getFieldAlias', 'fieldNameOf', 'valueForField',
+  'getUnitTable', 'unitFactor', 'parseNumUnit', 'valueWithUnitForField',
   'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates',
   'itemSeqLabel', 'itemBody', 'detailLine', 'statLine', 'formatResult', 'isNeg'
 ];
@@ -249,7 +250,7 @@ async function verify(rows) {
             gradedMap.get(rowNo).items.push(item);
           });
         }
-      } catch (e) { /* 单片失败不影响其他片 */ }
+      } catch (e) { console.log(`\n  ⚠ 片 ${idx} 失败：${e.message}`); }
       finished++;
       process.stdout.write(`\r  AI 判定 ${finished}/${jobs.length} 片…`);
     }
@@ -292,7 +293,7 @@ async function verify(rows) {
               gradedMap.get(rowNo).items.push(item);
             });
           }
-        } catch (e) { /* 保持 pending */ }
+        } catch (e) { console.log(`\n  ⚠ 补漏行 ${m.row} 失败：${e.message}`); }
         mDone++;
         process.stdout.write(`\r  补漏 ${mDone}/${missing.length} 行…`);
       }
@@ -341,7 +342,7 @@ async function verify(rows) {
               vDown++;
             });
           }
-        } catch (e) { /* 核验失败保留初判 */ }
+        } catch (e) { console.log(`\n  ⚠ 核验行 ${m.p.row} 失败：${e.message}`); }
         vDone++;
         process.stdout.write(`\r  AI 核验 ${vDone}/${verifyTargets.length} 行，降级 ${vDown} 条…`);
       }

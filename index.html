@@ -354,7 +354,7 @@ function buildItemStates(p,g){
       //    （如把"响应16GB"写成"低于要求的8GB"），沿用会让结论自相矛盾。
       const vd=numericVerdict(it.text,bp.text);
       if(vd){
-        status=vd.dir; note=dirNote(vd.dir,vd.av,vd.bv); conf=null;
+        status=vd.dir; note=dirNote(vd.dir,vd.av,vd.bv,vd); conf=null;
       }else if(status==='matched'){
         // 数值不可比但语义已匹配 → 保持匹配，理由写"响应内容与要求一致"
         note='';
@@ -395,7 +395,8 @@ function buildItemStates(p,g){
       const bv0=bp?valueForField(bp.text,fieldNameOf(it.text)):null;
       if(av0!=null && bv0!=null){
         const d=bv0<av0?'negative':(bv0>av0?'positive':'matched');
-        status=d; note=dirNote(d,av0,bv0); conf=null;
+        note=dirNote(d,av0,bv0,{kind:d==='matched'?'eq':(((bv0>av0)===(d==='positive'))?'min':'max')});
+        status=d; conf=null;
       }else{
         note='';
       }
@@ -474,15 +475,141 @@ function valueForField(text,field){
   const n=nums(seg);
   return n.length?n[0]:null;
 }
-// 取「数值 + 其后紧跟的单位」，用于校验两个数值是否可比
-function numWithUnit(text){
-  const m=String(text||'').match(/(\d+(?:\.\d+)?)\s*([^\d\s,，。；;：:、（）()]{0,5})/);
+// ===== 基础单位知识库（v2.8）=====
+// 每个维度给「基准单位」+「别名→换算到基准的系数」。
+// 裁决时两侧都换算到同一基准再比 ≥/≤；库里没有的单位一律不裁决（交给模型/待确认），绝不瞎比。
+// 注意大小写敏感：b=比特、B=字节；m=米、M=兆；g=克、G=吉；t=吨、T=太。
+function getUnitTable(){ return {
+  time:{ base:'s', units:{
+    'ms':0.001,'毫秒':0.001,
+    's':1,'sec':1,'secs':1,'second':1,'seconds':1,'秒':1,'秒钟':1,
+    'min':60,'mins':60,'minute':60,'minutes':60,'分钟':60,
+    'h':3600,'hr':3600,'hrs':3600,'hour':3600,'hours':3600,'小时':3600,'个小时':3600,
+    'd':86400,'day':86400,'days':86400,'天':86400
+  }},
+  storage:{ base:'B', units:{
+    'b':0.125,'bit':0.125,'bits':0.125,'比特':0.125,
+    'B':1,'byte':1,'bytes':1,'字节':1,
+    'kb':125,'kbit':125,'kilobit':125,'千比特':125,
+    'KB':1024,'K':1024,'kB':1024,'千字节':1024,
+    'mb':125000,'mbit':125000,'megabit':125000,'兆比特':125000,
+    'MB':1048576,'M':1048576,'mB':1048576,'兆':1048576,'兆字节':1048576,
+    'gb':125000000,'gbit':125000000,'gigabit':125000000,
+    'GB':1073741824,'G':1073741824,'gB':1073741824,'吉字节':1073741824,
+    'tb':125000000000,'tbit':125000000000,
+    'TB':1099511627776,'T':1099511627776,'太字节':1099511627776
+  }},
+  speed:{ base:'bps', units:{
+    'bps':1,'bit/s':1,'比特每秒':1,
+    'kbps':1000,'Kb/s':1000,'kb/s':1000,'Kbps':1000,'千比特每秒':1000,
+    'Mbps':1000000,'mbps':1000000,'Mb/s':1000000,'兆比特每秒':1000000,
+    'MB/s':8000000,'Gbps':1000000000,'gbps':1000000000,'Gb/s':1000000000,'GB/s':8000000000
+  }},
+  frequency:{ base:'Hz', units:{
+    'hz':1,'Hz':1,'赫兹':1,
+    'khz':1000,'KHz':1000,'kHz':1000,'千赫':1000,'千赫兹':1000,
+    'mhz':1000000,'MHz':1000000,'兆赫':1000000,'兆赫兹':1000000,
+    'ghz':1000000000,'GHz':1000000000,'吉赫':1000000000,'吉赫兹':1000000000
+  }},
+  power:{ base:'W', units:{
+    'mw':0.001,'mW':0.001,'毫瓦':0.001,
+    'w':1,'W':1,'瓦':1,'瓦特':1,
+    'kw':1000,'kW':1000,'KW':1000,'千瓦':1000,'马力':735.5
+  }},
+  voltage:{ base:'V', units:{
+    'mv':0.001,'mV':0.001,'毫伏':0.001,
+    'v':1,'V':1,'伏':1,'伏特':1,'kv':1000,'kV':1000,'千伏':1000
+  }},
+  current:{ base:'A', units:{
+    'ma':0.001,'mA':0.001,'毫安':0.001,
+    'a':1,'A':1,'安':1,'安培':1
+  }},
+  charge:{ base:'mAh', units:{
+    'mah':1,'mAh':1,'毫安时':1,'ah':1000,'Ah':1000,'安时':1000
+  }},
+  length:{ base:'mm', units:{
+    'mm':1,'毫米':1,'cm':10,'厘米':10,'dm':100,'分米':100,
+    'm':1000,'米':1000,'km':1000000,'千米':1000000,'公里':1000000,
+    'in':25.4,'inch':25.4,'英寸':25.4,'吋':25.4,'寸':25.4,'ft':304.8,'英尺':304.8
+  }},
+  weight:{ base:'g', units:{
+    'mg':0.001,'毫克':0.001,'g':1,'克':1,'kg':1000,'千克':1000,'公斤':1000,
+    't':1000000,'吨':1000000,'lb':453.592,'磅':453.592
+  }},
+  volume:{ base:'ml', units:{
+    'ml':1,'毫升':1,'l':1000,'L':1000,'升':1000
+  }},
+  percent:{ base:'%', units:{
+    '%':1,'％':1,'percent':1,'百分比':1
+  }},
+  count:{ base:'个', units:{
+    '个':1,'件':1,'台':1,'套':1,'块':1,'张':1,'只':1,'支':1,'本':1,'条':1,
+    '路':1,'口':1,'位':1,'种':1,'颗':1,'枚':1,'组':1,'对':1,'双':1,'席':1,'户':1,'人':1
+  }},
+  temperature:{ base:'℃', units:{
+    '℃':1,'°C':1,'摄氏度':1,'度':1
+  }},
+  area:{ base:'㎡', units:{
+    '㎡':1,'m2':1,'m²':1,'平方米':1,'cm2':0.0001,'平方厘米':0.0001
+  }}
+}; }
+// 查单位：返回 {dim,factor,base}，未收录返回 null
+function unitFactor(u){
+  const key=String(u||'').trim();
+  if(!key) return null;
+  const table=getUnitTable();
+  for(const dim of Object.keys(table)){
+    const units=table[dim].units;
+    if(Object.prototype.hasOwnProperty.call(units,key))
+      return {dim,factor:units[key],base:table[dim].base};
+  }
+  return null;
+}
+// 取「数值 + 其后紧跟的单位」。单位用「最长已知别名前缀」截取：
+// "120G固态"→"G"，"100Mbps"→"Mbps"，"16小时"→"小时"，避免把后缀中文吞进单位。
+function parseNumUnit(seg){
+  const m=String(seg||'').match(/(\d+(?:\.\d+)?)\s*([^\d\s,，。；;：:、（）()\[\]【】]{0,8})/);
   if(!m) return null;
-  let unit=(m[2]||'').trim();
-  unit=unit.replace(/[（(].*$/,'').replace(/[。．.]$/,'');
-  // 单位归一：大小写统一；中文单位保留
-  if(/^[A-Za-z]+$/.test(unit)) unit=unit.toLowerCase();
-  return {n:parseFloat(m[1]), unit};
+  const raw=(m[2]||'').trim();
+  const table=getUnitTable();
+  let unit='',bestLen=0;
+  for(const dim of Object.keys(table)){
+    for(const key of Object.keys(table[dim].units)){
+      if(!raw.startsWith(key)) continue;
+      // 防误截断：TFLOPS 不能截成 T、Mbps 不能截成 M。
+      // 已知单位后若还紧跟英文字母，说明是更长的未知单位，整段当未知处理。
+      if(/^[A-Za-z]/.test(raw.slice(key.length))) continue;
+      if(key.length>bestLen){ bestLen=key.length; unit=key; }
+    }
+  }
+  if(!unit){
+    // 纯符号（×、/、° 等）不是单位，按无单位处理；
+    // 真正的未知单位（如 px、TFLOPS）原样保留 → unitFactor 返回 null，不裁决。
+    unit=/[A-Za-z\u4e00-\u9fa5%]/.test(raw)?raw:'';
+  }
+  return {n:parseFloat(m[1]),unit};
+}
+// 兼容旧调用
+function numWithUnit(seg){ return parseNumUnit(seg); }
+// 在文本中按字段定位「数值+单位」。字段找不到时，若全文只有一个数字则整段解析
+// （应对 B 条目写成"16小时"这种没有字段名的独立响应）。
+function valueWithUnitForField(text,field,allowWhole){
+  const t=String(text||'');
+  const numsAll=t.match(/\d+(?:\.\d+)?/g)||[];
+  const whole=()=>numsAll.length===1?parseNumUnit(t):null;
+  if(!field) return whole();
+  const alias=getFieldAlias()[field]||[field];
+  const low=t.toLowerCase();
+  let pos=-1,used='';
+  for(const a of alias){
+    const p=low.indexOf(a.toLowerCase());
+    if(p>=0&&(pos<0||p<pos)){ pos=p; used=a; }
+  }
+  if(pos<0) return allowWhole?whole():null;
+  const rest=t.slice(pos+used.length,pos+used.length+60);
+  const cut=rest.search(/[,，;；\n]|[\u4e00-\u9fa5]{2,6}\s*[：:]/);
+  const seg=cut>0?rest.slice(0,cut):rest;
+  return parseNumUnit(seg)||(allowWhole?whole():null);
 }
 // 数值方向裁决：返回 {dir,av,bv} 或 null
 // 关键：B 的数值按 A 的【字段名】定位，不再取全文第一个数字。
@@ -494,23 +621,40 @@ function numericVerdict(aText,bText){
   if(nThresh>1) return null;
   const lowM=aText.match(/[≥]|>=|不低于|不少于|不小于|至少|大于等于/);
   const highM=aText.match(/[≤]|<=|不超过|不大于|最高|最多|小于等于/);
-  const av=nums(aText);
-  if(!av.length) return null;
   const field=fieldNameOf(aText);
-  const bv=valueForField(bText,field);
-  if(bv==null) return null;   // B 里找不到该字段 → 不裁决
-  const ua=numWithUnit(aText), ub=numWithUnit(bText);
-  if(ua&&ub&&ua.unit&&ub.unit&&ua.unit!==ub.unit) return null;   // 单位不同，不可比
-  let dir=null;
-  if(lowM) dir=bv<av[0]?'negative':(bv>av[0]?'positive':'matched');
-  else if(highM) dir=bv>av[0]?'negative':(bv<av[0]?'positive':'matched');
-  else if(av[0]===bv && /\d/.test(aText)) dir='matched';
-  return dir?{dir,av:av[0],bv}:null;
+  const A=valueWithUnitForField(aText,field,true);
+  const B=valueWithUnitForField(bText,field,true);
+  if(!A||!B) return null;
+  let cmpA=A.n,cmpB=B.n,conv=null;
+  const fa=A.unit?unitFactor(A.unit):null;
+  const fb=B.unit?unitFactor(B.unit):null;
+  if(A.unit&&B.unit){
+    // 已知单位：换算到同一基准再比。未知单位或跨维度（时间 vs 存储）一律不裁决。
+    if(!fa||!fb||fa.dim!==fb.dim) return null;
+    cmpA=A.n*fa.factor; cmpB=B.n*fb.factor;
+    if(fa.factor!==fb.factor) conv={bvInA:+(B.n*fb.factor/fa.factor).toFixed(6),aUnit:A.unit};
+  }else if(!A.unit&&!B.unit){
+    // 两侧都无单位 → 纯数值直接比
+  }else{
+    return null;   // 一侧有单位一侧没有 → 不瞎比
+  }
+  let dir=null,kind='eq';
+  if(lowM){ kind='min'; dir=cmpB<cmpA?'negative':(cmpB>cmpA?'positive':'matched'); }
+  else if(highM){ kind='max'; dir=cmpB>cmpA?'negative':(cmpB<cmpA?'positive':'matched'); }
+  else if(cmpA===cmpB&&/\d/.test(aText)) dir='matched';
+  return dir?{dir,av:A.n,bv:B.n,au:A.unit,bu:B.unit,conv,kind}:null;
 }
-function dirNote(dir,av,bv){
-  if(dir==='negative') return `响应${bv}，低于要求的${av}`;
-  if(dir==='positive') return `响应${bv}，优于要求的${av}`;
-  return `响应${bv}，等于要求的${av}`;
+function dirNote(dir,av,bv,info){
+  info=info||{};
+  const au=info.au||'',bu=info.bu||'';
+  const f=v=>Number.isInteger(Number(v))?String(v):String(+Number(v).toFixed(4));
+  const kind=info.kind||(dir==='matched'?'eq':(((bv>av)===(dir==='positive'))?'min':'max'));
+  let bShow=`响应${f(bv)}${bu}`;
+  if(info.conv&&info.conv.aUnit) bShow+=`=${f(info.conv.bvInA)}${info.conv.aUnit}`;
+  const aShow=`要求的${f(av)}${au}`;
+  if(dir==='negative') return `${bShow}，${kind==='max'?'高于':'低于'}${aShow}`;
+  if(dir==='positive') return `${bShow}，优于${aShow}`;
+  return `${bShow}，等于${aShow}`;
 }
 // A 条目在 B 全文中是否有任何相关内容（用于区分"找不到对应内容"与"明确不满足"）
 // 中文用 2-gram 滑窗，避免"配件种类"这类长词整体匹配不上"配件3种"而误判为无关
