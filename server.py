@@ -72,10 +72,14 @@ THINKING = _cfg("LLM_THINKING", default="")
 
 PORT = int(_cfg("PORT", default="8765"))
 
+# 可选访问口令：配置后，/api/grade 必须带正确 token 才放行（防公网白嫖 API Key）。
+# /health 与静态页面不受保护，便于探测和访问。token 从 URL ?t= 或 X-Access-Token 头读取。
+ACCESS_TOKEN = _cfg("ACCESS_TOKEN", default="")
+
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-Access-Token",
 }
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -134,6 +138,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.path.startswith("/api/grade"):
             self._json(404, {"error": "not found"})
             return
+        # 访问口令校验：仅保护花钱的 /api/grade，静态页面与 /health 公开。
+        if ACCESS_TOKEN:
+            supplied = self.headers.get("X-Access-Token", "")
+            if not supplied and "?" in self.path:
+                from urllib.parse import parse_qs, urlsplit
+                supplied = parse_qs(urlsplit(self.path).query).get("t", [""])[0]
+            if supplied != ACCESS_TOKEN:
+                self._json(401, {"error": "UNAUTHORIZED", "message": "访问口令错误或缺失"})
+                return
         if not API_KEY or API_KEY.startswith("your_"):
             self._json(400, {"error": "NO_KEY", "message": "服务器未配置 API Key，请在 .env 中填写 LLM_API_KEY"})
             return

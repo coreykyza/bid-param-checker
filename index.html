@@ -799,12 +799,19 @@ function buildUserPayload(pairs){
   })});
 }
 
+function accessHeaders(){
+  // 客户从带 ?t=TOKEN 的链接进入后，token 存 localStorage；本地开发无 token 时不加头。
+  let t='';
+  try{ t=new URLSearchParams(location.search).get('t')||localStorage.getItem('bc_token')||''; }catch(e){}
+  if(t){ try{ localStorage.setItem('bc_token',t); }catch(e){} }
+  return t?{'Content-Type':'application/json','X-Access-Token':t}:{'Content-Type':'application/json'};
+}
 async function aiGradeBatch(pairs,attempt=1){
   const url=$('proxyUrl').value.replace(/\/$/,'')+'/api/grade';
   const ctl=new AbortController(); const tid=setTimeout(()=>ctl.abort(),120000);
   try{
     const r=await fetch(url,{
-      method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+      method:'POST',headers:accessHeaders(),signal:ctl.signal,
       body:JSON.stringify({messages:[
         {role:'system',content:SYSTEM_PROMPT},
         {role:'user',content:buildUserPayload(pairs)},
@@ -854,7 +861,7 @@ async function aiVerifyBatch(pairs,attempt=1){
   const ctl=new AbortController(); const tid=setTimeout(()=>ctl.abort(),120000);
   try{
     const r=await fetch(url,{
-      method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+      method:'POST',headers:accessHeaders(),signal:ctl.signal,
       body:JSON.stringify({role:'verify',messages:[
         {role:'system',content:VERIFY_PROMPT},
         {role:'user',content:buildVerifyPayload(pairs)},
