@@ -83,9 +83,22 @@ ACCESS_TOKEN = _cfg("ACCESS_TOKEN", default="")
 # 某模型返回 429（额度耗尽 / 被暂停）即自动拉黑并切下一个，拉黑结果写入 model_deadlist.json，
 # 服务重启后依然有效。全部拉黑时清空黑名单重试一轮（防止用户换了 key 后永久卡死）。
 # 未配置 pool 时回退到单模型 LLM_MODEL / LLM_VERIFY_MODEL，行为与旧版一致。
+# 火山默认池：当 .env 未显式配置 pool 且 base_url 指向火山时自动启用。
+# 这样旧 .env 里已失效的 LLM_MODEL 也不会拖垮服务，客户更新只需换 server.py + index.html。
+_VOLC_DEFAULT_POOL = "deepseek-v4-1-flash-economy-261017,deepseek-v4-flash-ga-260731,glm-5-3-flash-260828,deepseek-v4-pro-ga-260813,glm-5-2-260617,doubao-seed-evolving"
+_VOLC_DEFAULT_VERIFY_POOL = "doubao-seed-evolving,deepseek-v4-pro-ga-260813,glm-5-3-flash-260828"
+
+
 def _pool(key, fallback):
     raw = _cfg(key, default="")
-    return [x.strip() for x in raw.split(",") if x.strip()] or ([fallback] if fallback else [])
+    if raw:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    if "volces.com" in API_URL:
+        if key == "LLM_MODEL_POOL":
+            return [x.strip() for x in _VOLC_DEFAULT_POOL.split(",") if x.strip()]
+        if key == "LLM_VERIFY_POOL":
+            return [x.strip() for x in _VOLC_DEFAULT_VERIFY_POOL.split(",") if x.strip()]
+    return [fallback] if fallback else []
 
 MODEL_POOL = _pool("LLM_MODEL_POOL", MODEL)
 VERIFY_POOL = _pool("LLM_VERIFY_POOL", VERIFY_MODEL) or MODEL_POOL

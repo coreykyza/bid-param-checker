@@ -8,6 +8,21 @@
 
 ---
 
+## [2.9.1] - 2026-11-25 · 内置默认模型池 + 一条命令更新
+
+### 问题
+v2.9 更新脚本需要往服务器 `.env` 写入长模型池配置。用户粘贴到 PowerShell 窗口时被折行截断，`$base` 断成两半、出现 `com/coreykyza/bid-param-checker/main` 孤立行，多个参数变成 Null。脚本先停了旧服务却没能下载新代码/重启，公网直接 502。
+
+### 修复
+- `server.py` 内置火山默认池 `_VOLC_DEFAULT_POOL` / `_VOLC_DEFAULT_VERIFY_POOL`：当 `.env` 未显式配置 pool 且 `LLM_BASE_URL` 指向火山时自动启用。旧 `.env`（只有 `LLM_MODEL`）也走自动路由，客户更新只需换 `server.py` + `index.html`，不用碰 `.env`。
+- 新增 `tools/update-server.ps1`：用户只需在 PowerShell 粘贴**一条短命令** `iex (iwr '<raw-url>/tools/update-server.ps1' -UseBasicParsing).Content`；脚本以文件方式下载后执行，不经过窗口逐行粘贴，不会再截断。脚本自动停旧服务、下载两个文件、清掉 `.env` 里残留的旧 pool 配置（无 BOM 写回）、启动、打印 `/health`。
+- 注意：脚本会移除 `.env` 中的 `LLM_MODEL_POOL` / `LLM_VERIFY_POOL` 两行以启用内置池。若日后要自定义池，请在 `.env` 重新加回。
+
+### 验证
+- 模拟旧 `.env`（无 pool，火山 base_url）：`MODEL_POOL` 自动展开为 6 个模型，`VERIFY_POOL` 3 个，`route=auto`，`py_compile` 通过。
+
+---
+
 ## [2.9.0] - 2026-11-25 · 模型自动路由（免费额度自动切换）
 
 ### 背景
