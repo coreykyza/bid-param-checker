@@ -32,20 +32,26 @@ python3 server.py           # 或双击 启动工具.command（带看门狗）
 本地开发用火山方舟免费额度，生产/线上用 DeepSeek 官方付费，两套都写在 `.env` 里，切换只改几行：
 
 ```env
-# 本地：火山免费额度
+# 本地：火山免费额度（自动路由，按池顺序调用）
 LLM_API_KEY=ark-你的key
 LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-LLM_MODEL=deepseek-v4-1-flash-261017
+LLM_MODEL=deepseek-v4-1-flash-economy-261017
+LLM_MODEL_POOL=deepseek-v4-1-flash-economy-261017,deepseek-v4-flash-ga-260731,glm-5-3-flash-260828,doubao-seed-evolving
 LLM_VERIFY_MODEL=doubao-seed-evolving
+LLM_VERIFY_POOL=doubao-seed-evolving,deepseek-v4-pro-ga-260813,glm-5-3-flash-260828
 LLM_THINKING=disabled
 
-# 生产：DeepSeek 官方付费
+# 生产：DeepSeek 官方付费（单模型即可，不需要池）
 # LLM_API_KEY=sk-你的key
 # LLM_BASE_URL=https://api.deepseek.com/v1
 # LLM_MODEL=deepseek-flash
+# LLM_MODEL_POOL=
 # LLM_VERIFY_MODEL=deepseek-v4-pro
+# LLM_VERIFY_POOL=
 ```
 
+- **自动路由（v2.9）**：模型池按优先级排列，某模型返回 429（额度耗尽 / 被暂停）就自动拉黑并切下一个，拉黑记录写 `model_deadlist.json`，服务重启后仍有效。全部拉黑时清空重试一轮，防止换 key 后永久卡死。初判池与核验池独立，核验仍用异构模型。
+- `/health` 返回 `route`、`model_pool`、`verify_pool`、`dead_models`，可直接看当前路由状态。
 - V4 系列默认开启思考，结构化判定必须 `LLM_THINKING=disabled`，否则 reasoning 会挤占 `max_tokens` 导致返回空。
 - 核验模型与初判模型刻意不同（异构），避免同一个模型复核自己。
 

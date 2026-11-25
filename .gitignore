@@ -21,3 +21,5 @@ node_modules/
 # 含明文 key / 访问口令的内部文档与脚本，不进公开仓库
 docs/04-*
 tools/服务器更新_*
+# 本地/服务器各自的模型拉黑状态，不进仓库
+model_deadlist.json

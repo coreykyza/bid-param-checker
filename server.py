@@ -12,6 +12,8 @@ import json
 import os
 import sys
 import mimetypes
+import threading
+from datetime import datetime
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -76,6 +78,56 @@ PORT = int(_cfg("PORT", default="8765"))
 # /health 与静态页面不受保护，便于探测和访问。token 从 URL ?t= 或 X-Access-Token 头读取。
 ACCESS_TOKEN = _cfg("ACCESS_TOKEN", default="")
 
+# ---- 模型自动路由（免费额度场景）----
+# LLM_MODEL_POOL / LLM_VERIFY_POOL 是按优先级排列的模型列表，逗号分隔。
+# 某模型返回 429（额度耗尽 / 被暂停）即自动拉黑并切下一个，拉黑结果写入 model_deadlist.json，
+# 服务重启后依然有效。全部拉黑时清空黑名单重试一轮（防止用户换了 key 后永久卡死）。
+# 未配置 pool 时回退到单模型 LLM_MODEL / LLM_VERIFY_MODEL，行为与旧版一致。
+def _pool(key, fallback):
+    raw = _cfg(key, default="")
+    return [x.strip() for x in raw.split(",") if x.strip()] or ([fallback] if fallback else [])
+
+MODEL_POOL = _pool("LLM_MODEL_POOL", MODEL)
+VERIFY_POOL = _pool("LLM_VERIFY_POOL", VERIFY_MODEL) or MODEL_POOL
+DEAD_FILE = BASE / "model_deadlist.json"
+_dead_lock = threading.Lock()
+
+
+def _load_dead():
+    try:
+        with _dead_lock:
+            if DEAD_FILE.is_file():
+                return json.loads(DEAD_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_dead(d):
+    try:
+        with _dead_lock:
+            DEAD_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        sys.stderr.write(f"[route] 无法保存模型黑名单: {e}\n")
+
+
+def _mark_dead(model, reason):
+    d = _load_dead()
+    d[model] = {"ts": datetime.now().isoformat(timespec="seconds"), "reason": str(reason)[:160]}
+    _save_dead(d)
+    sys.stderr.write(f"[route] 模型 {model} 已拉黑：{str(reason)[:100]}\n")
+
+
+def _active_model(pool):
+    """返回本次请求应使用的模型；如全部拉黑则清空黑名单从头再来。"""
+    dead = _load_dead()
+    for m in pool:
+        if m not in dead:
+            return m
+    _save_dead({})
+    sys.stderr.write("[route] 池内模型全部拉黑，清空黑名单重试一轮\n")
+    return pool[0] if pool else ""
+
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -104,10 +156,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {
                 "ok": True,
                 "key_configured": bool(API_KEY and not API_KEY.startswith("your_")),
-                "model": MODEL,
-                "verify_model": VERIFY_MODEL,
+                "model": _active_model(MODEL_POOL),
+                "verify_model": _active_model(VERIFY_POOL),
                 "provider": PROVIDER,
                 "thinking": THINKING or None,
+                "route": "auto" if len(MODEL_POOL) > 1 else "single",
+                "model_pool": MODEL_POOL,
+                "verify_pool": VERIFY_POOL,
+                "dead_models": list(_load_dead().keys()),
             })
             return
         # 托管静态文件（index.html / vendor 等）
@@ -158,41 +214,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not messages:
                 self._json(400, {"error": "BAD_REQUEST", "message": "缺少 messages"})
                 return
-            # role=verify 走核验模型；默认走初判模型。模型名只在服务端 .env 配置，前端不接触。
-            use_model = VERIFY_MODEL if data.get("role") == "verify" else MODEL
+            role = data.get("role") or ""
         except Exception as e:
             self._json(400, {"error": "BAD_REQUEST", "message": str(e)})
             return
 
-        payload = {
-            "model": use_model,
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
-            "response_format": {"type": "json_object"},
-        }
-        # DeepSeek 默认开启思考模式，逐条判定这种任务不需要推理，关掉快很多。
-        # 通过 .env 里 LLM_THINKING=disabled 控制；智谱等不支持该参数的服务不要设置。
-        if THINKING in ("enabled", "disabled"):
-            payload["thinking"] = {"type": THINKING}
-        req = urllib.request.Request(
-            API_URL,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=130) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                self._json(200, result)
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "ignore")[:500]
-            self._json(e.code, {"error": "UPSTREAM_HTTP_ERROR", "status": e.code, "detail": detail})
-        except Exception as e:
-            self._json(502, {"error": "UPSTREAM_ERROR", "message": str(e)})
+        # 按池顺序调用；429 / 模型未开通即拉黑该模型并自动切下一个，直到成功或全部耗尽。
+        pool = VERIFY_POOL if role == "verify" else MODEL_POOL
+        candidates = [m for m in pool if m not in _load_dead()]
+        if not candidates:
+            _save_dead({})
+            sys.stderr.write("[route] 池内模型全部拉黑，清空黑名单重试一轮\n")
+            candidates = list(pool)
+        last_error = None
+        for use_model in candidates:
+            payload = {
+                "model": use_model,
+                "messages": messages,
+                "temperature": 0.1,
+                "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
+                "response_format": {"type": "json_object"},
+            }
+            # DeepSeek V4 默认开启思考，结构化判定不需要，关掉更快且不空返回。
+            if THINKING in ("enabled", "disabled"):
+                payload["thinking"] = {"type": THINKING}
+            req = urllib.request.Request(
+                API_URL,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=130) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                    self._json(200, result)
+                    return
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "ignore")[:500]
+                last_error = (e.code, detail)
+                if e.code == 429 or (e.code == 403 and ("not activated" in detail.lower() or "未开通" in detail)):
+                    _mark_dead(use_model, f"HTTP {e.code}: {detail}")
+                    sys.stderr.write(f"[route] {use_model} 额度耗尽/不可用，切换下一个模型\n")
+                    continue
+                self._json(e.code, {"error": "UPSTREAM_HTTP_ERROR", "status": e.code, "detail": detail})
+                return
+            except Exception as e:
+                self._json(502, {"error": "UPSTREAM_ERROR", "message": str(e)})
+                return
+        status = last_error[0] if last_error else 429
+        self._json(status, {
+            "error": "ALL_MODELS_EXHAUSTED",
+            "message": "模型池内所有模型均不可用，请补充免费额度或换新 key",
+            "detail": last_error[1] if last_error else "",
+        })
 
     def log_message(self, fmt, *args):
         # 静默日志，避免刷屏；错误仍输出
@@ -207,7 +284,8 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
 
 if __name__ == "__main__":
     configured = bool(API_KEY and not API_KEY.startswith("your_"))
-    print(f"[bid-checker proxy] provider={PROVIDER} model={MODEL} verify_model={VERIFY_MODEL} thinking={THINKING or '-'} key_configured={configured} port={PORT}")
+    print(f"[bid-checker proxy] provider={PROVIDER} model={_active_model(MODEL_POOL)} verify_model={_active_model(VERIFY_POOL)} thinking={THINKING or '-'} key_configured={configured} port={PORT}")
+    print(f"[bid-checker proxy] 自动路由={'开' if len(MODEL_POOL) > 1 else '关'} 初判池={len(MODEL_POOL)}个 核验池={len(VERIFY_POOL)}个 已拉黑={len(_load_dead())}个")
     if not configured:
         print("[bid-checker proxy] WARNING: .env 未配置 LLM_API_KEY，真实核验不可用（HTML 会走演示模式）")
     print(f"[bid-checker proxy] 本机打开 http://localhost:{PORT}/index.html；外网访问请用 http://<服务器公网IP>:{PORT}/index.html")

@@ -93,6 +93,20 @@ const MODEL_NAME = cfg('LLM_MODEL', 'DEEPSEEK_MODEL', 'ZHIPU_MODEL') || 'glm-4-f
 const VERIFY_MODEL = cfg('LLM_VERIFY_MODEL') || MODEL_NAME;
 const THINKING = cfg('LLM_THINKING');
 const BASE = cfg('LLM_BASE_URL');
+// 自动路由：与 server.py 共用同一份拉黑名单，429 自动切下一个模型
+const DEAD_FILE = path.join(ROOT, 'model_deadlist.json');
+const loadDead = () => { try { return JSON.parse(fs.readFileSync(DEAD_FILE, 'utf8')); } catch (e) { return {}; } };
+const markDead = (m, reason) => {
+  const d = loadDead();
+  d[m] = { ts: new Date().toISOString(), reason: String(reason).slice(0, 160) };
+  fs.writeFileSync(DEAD_FILE, JSON.stringify(d, null, 2));
+};
+const splitPool = (raw, fallback) => {
+  const a = String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
+  return a.length ? a : [fallback];
+};
+const MODELS = splitPool(cfg('LLM_MODEL_POOL'), MODEL_NAME);
+const VERIFY_MODELS = splitPool(cfg('LLM_VERIFY_POOL'), VERIFY_MODEL);
 const DEFAULT_URLS = {
   deepseek: 'https://api.deepseek.com/v1/chat/completions',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
@@ -100,7 +114,39 @@ const DEFAULT_URLS = {
 let API = BASE || (MODEL_NAME.startsWith('deepseek') ? DEFAULT_URLS.deepseek : DEFAULT_URLS.zhipu);
 if (!API.replace(/\/$/, '').endsWith('/chat/completions')) API = API.replace(/\/$/, '') + '/chat/completions';
 if (!KEY) throw new Error('.env 里没有 LLM_API_KEY / ZHIPU_API_KEY');
-console.log(`模型：${MODEL_NAME} | 核验模型：${VERIFY_MODEL} | thinking=${THINKING || '-'} | ${API}`);
+console.log(`初判池：${MODELS.join(' → ')}`);
+console.log(`核验池：${VERIFY_MODELS.join(' → ')} | thinking=${THINKING || '-'} | ${API}`);
+
+// 按池顺序调用；429 自动拉黑并切下一个（与 server.py 行为一致）
+async function callWithFallback(pool, body) {
+  let dead = loadDead();
+  let candidates = pool.filter(m => !dead[m]);
+  if (!candidates.length) { fs.writeFileSync(DEAD_FILE, '{}'); candidates = [...pool]; }
+  let last = null;
+  for (const model of candidates) {
+    try {
+      const resp = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
+        body: JSON.stringify({ ...body, model }),
+        signal: AbortSignal.timeout(120000)
+      });
+      if (!resp.ok) {
+        const detail = (await resp.text()).slice(0, 300);
+        if (resp.status === 429) {
+          markDead(model, `HTTP 429: ${detail}`);
+          console.log(`\n  ⚠ ${model} 额度耗尽，自动切换下一个`);
+          last = new Error(`HTTP 429 ${detail}`);
+          continue;
+        }
+        throw new Error('HTTP ' + resp.status + ' ' + detail);
+      }
+      const data = await resp.json();
+      return data.choices[0].message.content;
+    } catch (e) { last = e; if (String(e.message).startsWith('HTTP ')) throw e; }
+  }
+  throw last || new Error('模型池全部不可用');
+}
 
 /* ---------- 3. 调模型（与前端 aiGradeBatch 等价） ---------- */
 async function grade(rows) {
@@ -125,7 +171,6 @@ async function grade(rows) {
     })
   };
   const body = {
-    model: MODEL_NAME,
     temperature: 0.1,
     max_tokens: parseInt(cfg('LLM_MAX_TOKENS') || '8192', 10),
     response_format: { type: 'json_object' },
@@ -135,21 +180,9 @@ async function grade(rows) {
     ]
   };
   if (THINKING === 'enabled' || THINKING === 'disabled') body.thinking = { type: THINKING };
-  const ctl = new AbortController();
-  const tid = setTimeout(() => ctl.abort(), 120000);
-  try {
-    const resp = await fetch(API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
-      body: JSON.stringify(body),
-      signal: ctl.signal
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()).slice(0, 200));
-    const data = await resp.json();
-    const content = data.choices[0].message.content;
-    const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(clean).results || [];
-  } finally { clearTimeout(tid); }
+  const content = await callWithFallback(MODELS, body);
+  const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(clean).results || [];
 }
 
 /* ---------- 3.5 核验专家：异构复核（带初判理由，标注仅供参考） ---------- */
@@ -173,7 +206,6 @@ async function verify(rows) {
     })
   };
   const body = {
-    model: VERIFY_MODEL,
     temperature: 0.1,
     max_tokens: parseInt(cfg('LLM_MAX_TOKENS') || '8192', 10),
     response_format: { type: 'json_object' },
@@ -183,21 +215,9 @@ async function verify(rows) {
     ]
   };
   if (THINKING === 'enabled' || THINKING === 'disabled') body.thinking = { type: THINKING };
-  const ctl = new AbortController();
-  const tid = setTimeout(() => ctl.abort(), 120000);
-  try {
-    const resp = await fetch(API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
-      body: JSON.stringify(body),
-      signal: ctl.signal
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()).slice(0, 200));
-    const data = await resp.json();
-    const content = data.choices[0].message.content;
-    const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(clean).results || [];
-  } finally { clearTimeout(tid); }
+  const content = await callWithFallback(VERIFY_MODELS, body);
+  const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(clean).results || [];
 }
 
 /* ---------- 4. 主流程：本地预判 + 并发 ---------- */
