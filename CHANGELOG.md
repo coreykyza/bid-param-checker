@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.2.6] - 2026-11-26 · 判定/核验解耦 + 前端补发生产 + 自动同步根治
+
+### 改动
+- **下拉只控制判定模型，核验恒定火山**：`_pick_pool` 改为 `role=="verify"` 恒定返回 `_CN_VERIFY_POOL`（从 VERIFY_POOL 剔除所有 `tf:`），与 poolMode 无关；判定仍按下拉（gpt→MODEL_POOL / cn→_CN_SUBPOOL）。前端核验请求不再带 poolMode，下拉框下加说明文字「仅控制判定模型；核验固定使用国内（火山）模型」。health 用 `verify_pool_effective` / `verify_fixed` 反映恒定核验池。
+- **修自动同步根因（生产前端一直停在 v3.1.1）**：旧脚本读 `@main/deploy/prod.txt` 拿指针，而各 CDN 镜像把 @main 缓存死在旧 SHA（jsdmirror/fastly→v3.1.1、其余→v3.2.2），且「取第一个不同 SHA」会把生产**倒退**到更旧版本。改为：按当前徽章版本**枚举未来 tag**（`@v3.2.X`，不可变/秒达/无缓存）+ GitHub API 实时 SHA + @main 指针作候选，逐一锁 SHA/tag 下载并解析徽章版本，**只装严格更高版本**，天然防倒退，且不依赖任何单一外部 API。此前从 v3.2.2 起所有前端改动（下拉框、耗时卡片、删底部小字）从未上生产，本次一并补发。
+
 ## [3.2.5] - 2026-11-26 · 判定模型选择（gpt / 国内）+ 本地 TLS 修复
 
 ### 改动

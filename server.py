@@ -208,19 +208,21 @@ def _pool(key, fallback):
 
 MODEL_POOL = _pool("LLM_MODEL_POOL", MODEL)
 VERIFY_POOL = _pool("LLM_VERIFY_POOL", VERIFY_MODEL) or MODEL_POOL
-# 模型选择（前端「上传与配置」枚举，请求体带 poolMode）：
-#   gpt（默认，慢但准）——初判走 MODEL_POOL（tf:gpt 优先），核验走 VERIFY_POOL（国内优先）
-#   cn（快，国内火山）——初判走 MODEL_POOL 剔除 tf: 后的国内池，核验走 tf: 池，仍保持异构复核
+# 模型选择（前端「上传与配置」枚举，请求体带 poolMode）——只控制【判定】模型：
+#   gpt（默认，慢但准）——判定走 MODEL_POOL（tf:gpt 优先）
+#   cn（快，国内火山）——判定走 MODEL_POOL 剔除 tf: 后的国内池
+# 【核验】恒定走国内(火山)池 _CN_VERIFY_POOL，与下拉选择无关，统一用火山。
 _TF_SUBPOOL = [m for m in MODEL_POOL if str(m).startswith("tf:")]
 _CN_SUBPOOL = [m for m in MODEL_POOL if not str(m).startswith("tf:")]
+_CN_VERIFY_POOL = [m for m in VERIFY_POOL if not str(m).startswith("tf:")] or VERIFY_POOL
 
 
 def _pick_pool(role, pool_mode):
+    if role == "verify":
+        return _CN_VERIFY_POOL                      # 核验恒定火山，不受下拉影响
     if pool_mode == "cn":
-        if role == "verify":
-            return _TF_SUBPOOL if _TF_SUBPOOL else VERIFY_POOL
         return _CN_SUBPOOL if _CN_SUBPOOL else MODEL_POOL
-    return VERIFY_POOL if role == "verify" else MODEL_POOL
+    return MODEL_POOL                              # 判定默认 tf:gpt 优先
 
 DEAD_FILE = BASE / "model_deadlist.json"
 _dead_lock = threading.Lock()
@@ -315,7 +317,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "verify_pool": VERIFY_POOL,
                 "providers": {"primary": PROVIDER, "extra": sorted(_EXTRA_PROVIDERS.keys())},
                 "cn_grade_pool": _CN_SUBPOOL,
-                "cn_verify_pool": _TF_SUBPOOL,
+                "verify_pool_effective": _CN_VERIFY_POOL,   # 核验恒定火山（已剔除 tf:），与下拉无关
+                "verify_fixed": True,
                 "dead_models": list(dead_now.keys()),
                 "dead_details": dead_now,
                 "dead_ttl_sec": DEAD_TTL_SEC,
