@@ -9,6 +9,7 @@ import socketserver
 import urllib.request
 import urllib.error
 import ssl
+import time
 import json
 import os
 import sys
@@ -202,13 +203,25 @@ MODEL_POOL = _pool("LLM_MODEL_POOL", MODEL)
 VERIFY_POOL = _pool("LLM_VERIFY_POOL", VERIFY_MODEL) or MODEL_POOL
 DEAD_FILE = BASE / "model_deadlist.json"
 _dead_lock = threading.Lock()
+# 黑名单自动复活：任何拉黑都有有效期，到点自动重试。
+# 避免「一次瞬时并发 429」把高优先级模型永久钉死（第三方中转常见 RPM 限制，
+# 与账户额度无关；旧版把 429 一律当额度耗尽且重启不清）。
+DEAD_TTL_SEC = int(_cfg("LLM_DEAD_TTL_SEC", default="1800"))  # 默认 30 分钟
 
 
 def _load_dead():
+    """读取黑名单；已过期条目自动移除复活。旧格式（无 until）一律视为过期清除。"""
     try:
         with _dead_lock:
-            if DEAD_FILE.is_file():
-                return json.loads(DEAD_FILE.read_text(encoding="utf-8"))
+            if not DEAD_FILE.is_file():
+                return {}
+            d = json.loads(DEAD_FILE.read_text(encoding="utf-8"))
+            now = time.time()
+            alive = {m: v for m, v in d.items()
+                     if isinstance(v, dict) and float(v.get("until", 0)) > now}
+            if len(alive) != len(d):
+                DEAD_FILE.write_text(json.dumps(alive, ensure_ascii=False, indent=2), encoding="utf-8")
+            return alive
     except Exception:
         pass
     return {}
@@ -222,15 +235,19 @@ def _save_dead(d):
         sys.stderr.write(f"[route] 无法保存模型黑名单: {e}\n")
 
 
-def _mark_dead(model, reason):
+def _mark_dead(model, reason, ttl=None):
     d = _load_dead()
-    d[model] = {"ts": datetime.now().isoformat(timespec="seconds"), "reason": str(reason)[:160]}
+    d[model] = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "until": time.time() + (DEAD_TTL_SEC if ttl is None else ttl),
+        "reason": str(reason)[:160],
+    }
     _save_dead(d)
-    sys.stderr.write(f"[route] 模型 {model} 已拉黑：{str(reason)[:100]}\n")
+    sys.stderr.write(f"[route] 模型 {model} 已拉黑 {DEAD_TTL_SEC if ttl is None else ttl}s（到期自动复活）：{str(reason)[:100]}\n")
 
 
 def _active_model(pool):
-    """返回本次请求应使用的模型；如全部拉黑则清空黑名单从头再来。"""
+    """返回本次请求应使用的模型；如全部拉黑则清空黑名单从头再来（带 TTL 自动复活）。"""
     dead = _load_dead()
     for m in pool:
         if m not in dead:
@@ -264,6 +281,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
+            dead_now = _load_dead()
             self._json(200, {
                 "ok": True,
                 "key_configured": bool(API_KEY and not API_KEY.startswith("your_")),
@@ -275,8 +293,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "model_pool": MODEL_POOL,
                 "verify_pool": VERIFY_POOL,
                 "providers": {"primary": PROVIDER, "extra": sorted(_EXTRA_PROVIDERS.keys())},
-                "dead_models": list(_load_dead().keys()),
+                "dead_models": list(dead_now.keys()),
+                "dead_details": dead_now,
+                "dead_ttl_sec": DEAD_TTL_SEC,
             })
+            return
+        if self.path.startswith("/api/admin/clear-dead"):
+            # 远程清空黑名单（无需连服务器重启）：口令与 /api/grade 一致
+            supplied = self.headers.get("X-Access-Token", "")
+            if not supplied and "?" in self.path:
+                from urllib.parse import parse_qs, urlsplit
+                supplied = parse_qs(urlsplit(self.path).query).get("t", [""])[0]
+            if ACCESS_TOKEN and supplied != ACCESS_TOKEN:
+                self._json(401, {"error": "UNAUTHORIZED", "message": "访问口令错误或缺失"})
+                return
+            cleared = list(_load_dead().keys())
+            _save_dead({})
+            self._json(200, {"ok": True, "cleared": cleared,
+                             "message": "黑名单已清空，下轮请求重新按池优先级选择模型"})
             return
         # 托管静态文件（index.html / vendor 等）
         rel = self.path.split("?", 1)[0].lstrip("/") or "index.html"
@@ -374,12 +408,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", "ignore")[:500]
                 last_error = (e.code, detail)
-                if e.code == 429 or (e.code == 403 and ("not activated" in detail.lower() or "未开通" in detail or "quota exhausted" in detail.lower() or "免费额度" in detail)):
-                    _mark_dead(entry, f"HTTP {e.code}: {detail}")
-                    sys.stderr.write(f"[route] {entry} 额度耗尽/不可用，切换下一个模型\n")
+                low = detail.lower()
+                quota_gone = any(k in low for k in (
+                    "quota", "insufficient", "balance", "exhausted", "expired",
+                    "out of credit", "no credit", "额度", "余额", "欠费", "用尽", "已用完"))
+                never_on = any(k in low for k in (
+                    "not activated", "not enabled", "model not found", "does not exist",
+                    "未开通", "未启用", "模型不存在"))
+                if e.code == 429 and not quota_gone:
+                    # 瞬时并发限流 / RPM 限制：只在本轮跳过，绝不写持久黑名单。
+                    # 下一轮请求仍从池首位（tf）开始尝试。
+                    sys.stderr.write(f"[route] {entry} 瞬时 429 限流，本轮跳过（不拉黑）\n")
                     continue
-                self._json(e.code, {"error": "UPSTREAM_HTTP_ERROR", "status": e.code, "detail": detail})
-                return
+                if e.code == 429 or (e.code in (401, 403) and (quota_gone or never_on)):
+                    _mark_dead(entry, f"HTTP {e.code}: {detail}")
+                    sys.stderr.write(f"[route] {entry} 额度/权限不可用，拉黑 {DEAD_TTL_SEC}s 后自动复活\n")
+                    continue
+                # 其它上游错误（5xx 等）：同样跳过该模型，不让单次故障拖垮整轮
+                sys.stderr.write(f"[route] {entry} 上游 HTTP {e.code}，切下一个模型\n")
+                continue
             except Exception as e:
                 # 连接级故障（证书链 / DNS / 超时 / 连接重置）同样跳过当前模型，
                 # 继续尝试池内下一个；不写持久黑名单，故障恢复后自动回到高优先级。
