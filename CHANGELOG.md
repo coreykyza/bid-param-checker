@@ -367,3 +367,12 @@ v2.9 更新脚本需要往服务器 `.env` 写入长模型池配置。用户粘�
 - 核验池：doubao-seed-evolving 异构优先（核验须与初判异构），tf:gpt-6.1-sol 后备
 ### Verified
 - gpt-6.2-sol 用项目真实 SYSTEM_PROMPT 判定 5/5 全对（型号低于=negative、16GB 边界=matched、5年质保=positive），响应格式与项目 JSON 结构一致，response_format json_object 兼容
+
+## v3.2.1 (2026-11-26)
+### Fixed（生产真实链路故障）
+- 精简版 Windows Server 缺 Let's Encrypt 新根（ISRG Root X2），导致访问 tokenfuture.si 报 `SSL: CERTIFICATE_VERIFY_FAILED / unable to get local issuer certificate`，初判池全挂 → 前端 502。health 只读配置不发请求，故看起来全绿。
+- 修复：在系统默认信任根之上「追加」内嵌 ISRG Root X1/X2 两张官方根证书（SHA256 指纹已核对），不覆盖系统原有根，火山 DigiCert 链路不受影响；所有上游 HTTPS 请求统一带该 SSLContext。
+- 修复路由硬伤：连接级异常（证书链/DNS/超时/连接重置）原先直接 `return 502`，不切下一个模型，导致 6 个火山兜底全部失效。现改为跳过当前模型继续尝试池内下一个，且不写持久黑名单，故障恢复后自动回到高优先级。
+### Verified
+- 仅用内嵌 ISRG 根（模拟缺根环境）即可与 tokenfuture.si 完成 TLS 握手；_SSL_CTX 与火山握手正常。
+- 端到端：正常配置走 tf:gpt-6.2-sol 返回 200 判定全对；TF 端点设坏后自动降级到火山返回 200。
