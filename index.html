@@ -59,10 +59,13 @@ input[type=file]{display:none}
 .progress .bar{height:7px;background:#eef2f7;border-radius:5px;overflow:hidden}
 .progress .bar i{display:block;height:100%;background:var(--primary);width:0%;transition:width .25s;border-radius:5px}
 .progress .txt{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
 .stat{background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:11px 12px}
 .stat .n{font-size:20px;font-weight:700;line-height:1.2}
 .stat .l{font-size:11px;color:var(--muted);margin-top:2px}
+.stat .sub{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:1100px){.stats{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
 .stat.neg .n{color:var(--red)} .stat.pos .n{color:var(--green)} .stat.unc .n{color:var(--amber)}
 .tbl-wrap{max-height:560px;overflow:auto;border:1px solid var(--border);border-radius:8px}
 table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
@@ -140,9 +143,9 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
 
         <div class="opts">
           <div class="opt-row"><span>单次核验行数上限</span><input type="number" id="maxRows" value="100" min="1" max="500"></div>
-          <div class="opt-row"><span>每批发送行数</span><input type="number" id="batchSize" value="5" min="1" max="50"></div>
-          <div class="opt-row"><span>并发请求数</span><input type="number" id="concurrency" value="4" min="1" max="10"></div>
-          <div class="opt-row" style="margin-bottom:0"><span>代理地址</span><input type="text" id="proxyUrl" value="http://127.0.0.1:8765" style="width:150px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></div>
+          <div class="opt-row" style="display:none"><span>每批发送行数</span><input type="number" id="batchSize" value="5" min="1" max="50"></div>
+          <div class="opt-row" style="display:none"><span>并发请求数</span><input type="number" id="concurrency" value="4" min="1" max="10"></div>
+          <div class="opt-row" style="display:none;margin-bottom:0"><span>代理地址</span><input type="text" id="proxyUrl" value="http://127.0.0.1:8765" style="width:150px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></div>
         </div>
 
         <div class="actions">
@@ -150,7 +153,6 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
           <button class="btn btn-ghost" id="btnDemo">载入演示样例</button>
           <button class="btn btn-ghost" id="btnSample" >下载样例 Excel</button>
           <button class="btn btn-ghost" id="btnExport" disabled>导出核验结果 Excel</button>
-          <button class="btn btn-ghost" id="btnSpecs" title="型号参数库：把 i5-14500 这类型号展开成参数再比对">📚 型号参数库</button>
         </div>
 
         <div class="progress" id="progress">
@@ -165,6 +167,10 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
             ② 结论两档：全部满足 / 部分满足。C 列输出"共N项：负偏离X/待确认Y/匹配Z/正偏离W"，下方只列负偏离与待确认明细。<br>
             ③ 负偏离=响应低于要求；正偏离=响应优于要求；待确认=表述含糊、置信度低于 0.75。<br>
             ④ 含负偏离行的 C 单元格整格标红。单次最多核验 100 行。
+          </div>
+          <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
+            <button class="btn btn-ghost" id="btnSpecs" style="font-size:11px;padding:5px 10px" title="型号参数库：把 i5-14500 这类型号展开成参数再比对">📚 型号参数库</button>
+            <span style="font-size:11px;color:var(--muted);margin-left:6px">把 i5-14500 这类型号展开成参数再比对</span>
           </div>
         </details>
       </div>
@@ -779,8 +785,9 @@ function loadWorkbook(wb,name){
   if(!rows.length){ toast('未找到可核验的数据行（A/B 列）'); return; }
   S.wb=wb; S.ws=ws; S.rows=rows; S.results=[]; S.fileName=name||'参数表';
   const cap=parseInt($('maxRows').value)||100;
+  const itemCount=rows.slice(0,cap).reduce((s,r)=>s+splitItems(r.a).length,0);
   const info=$('fileinfo');
-  info.innerHTML=`文件：<b>${esc(S.fileName)}</b><br>有效数据行：<b>${rows.length}</b> 行${rows.length>cap?` · <span style="color:var(--red)">超出上限 ${rows.length-cap} 行将不核验</span>`:''}`;
+  info.innerHTML=`文件：<b>${esc(S.fileName)}</b><br>有效数据行：<b>${rows.length}</b> 行 · 核验条数：<b>${itemCount}</b> 条${rows.length>cap?`<br><span style="color:var(--red)">超出上限 ${rows.length-cap} 行将不核验</span>`:''}`;
   info.classList.add('show');
   $('btnVerify').disabled=false; $('btnExport').disabled=true;
   renderTable(true);
@@ -1463,12 +1470,17 @@ function renderTable(preview){
   const unc=S.results.filter(r=>r.cnt.uncertain>0).length;
   const pos=S.results.filter(r=>r.cnt.positive>0).length;
   const ok=S.results.filter(r=>r.overall==='全部满足').length;
+  const totalItems=S.results.reduce((s,r)=>s+(r.total||0),0);
+  const negItems=S.results.reduce((s,r)=>s+(r.cnt.negative||0),0);
+  const uncItems=S.results.reduce((s,r)=>s+(r.cnt.uncertain||0),0);
+  const okItems=S.results.filter(r=>r.overall==='全部满足').reduce((s,r)=>s+(r.total||0),0);
   body.innerHTML=`
     <div class="stats">
       <div class="stat"><div class="n">${S.results.length}</div><div class="l">核验行数</div></div>
-      <div class="stat neg"><div class="n">${neg}</div><div class="l">含负偏离</div></div>
-      <div class="stat unc"><div class="n">${unc}</div><div class="l">含待确认</div></div>
-      <div class="stat pos"><div class="n">${ok}</div><div class="l">全部满足行</div></div>
+      <div class="stat"><div class="n">${totalItems}</div><div class="l">核验条数</div><div class="sub">A列拆分后的核验条目</div></div>
+      <div class="stat neg"><div class="n">${neg}</div><div class="l">含负偏离</div><div class="sub">负偏离 ${negItems} 条</div></div>
+      <div class="stat unc"><div class="n">${unc}</div><div class="l">含待确认</div><div class="sub">待确认 ${uncItems} 条</div></div>
+      <div class="stat pos"><div class="n">${ok}</div><div class="l">全部满足行</div><div class="sub">匹配/正偏离 ${okItems} 条</div></div>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>行</th><th>A · 招标要求</th><th>B · 投标响应</th><th>C · 核验结论</th></tr></thead><tbody>
     ${S.results.map(r=>{
