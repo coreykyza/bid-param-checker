@@ -12,7 +12,7 @@ const NEEDED = [
   'nums', 'normText', 'splitItems', 'itemSame', 'scoreOverlap',
   'isGroupHeading', 'isBareValue', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'getUnitTable', 'unitFactor', 'parseNumUnit', 'numWithUnit', 'valueWithUnitForField',
-  'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates'
+  'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates', 'textRescue'
 ];
 function pick(name) {
   const m = new RegExp('function ' + name + '\\(').exec(js);
@@ -71,6 +71,29 @@ const e2e = [
 for (const [a, b, wantStatus, hint] of e2e) {
   const it = sandbox.buildItemStates({ row: 1, a, b }, { items: [] })[0];
   check(`E2E ${a} | ${b}`, it.status === wantStatus && it.note.includes(hint), `${it.status} ${it.note} bText=${it.bText}`);
+}
+
+/* ---------- 3. 文本一致兜底（v3.1）：模型漏判时本地救援 ---------- */
+// [A条目, B全文, 配对B条目, rescuable, 期望note或null]
+const rescueCases = [
+  // 逐字包含（真实跑批案例）
+  ['通信方式：蓝牙', '传感器满足招标参数\n参数配置：\n1.支持采样率：215HZ\n2.支持通信方式：蓝牙', '', true, '响应文本与要求一致'],
+  ['支持植物 / 动物 / 建筑 / 车辆四类生成模板', '系统支持：\n- 支持植物 / 动物 / 建筑 / 车辆四类生成模板\n- 其他', '', true, '响应文本与要求一致'],
+  // 近一致：B 抄 A 加了"支持"前缀
+  ['支持图形化编程、C/C++、Python等多种编程方式', '软件能力\n7.支持图形化编程、C/C++、Python三种编程方式', '7.支持图形化编程、C/C++、Python三种编程方式', true, '响应内容与要求基本一致'],
+  // 数值要求不走相似度兜底（≥8GB vs 4GB 相似度高但必须数值裁决）
+  ['内存：≥8GB DDR4 高速内存', '内存4GB DDR4', '内存4GB DDR4', true, null],
+  // "不支持"包住"支持"：不能判匹配
+  ['支持无线网络下多台设备间互相通讯', '本设备不支持无线网络下多台设备间互相通讯，仅支持单台', '', true, null],
+  // 模型已给出有效判定 → 不覆盖
+  ['通信方式：蓝牙', '2.支持通信方式：蓝牙', '', false, null],
+  // 纯序号/过短不触发
+  ['1、', '1、2、3、', '', true, null],
+];
+for (const [a, bFull, bp, rescuable, want] of rescueCases) {
+  const r = sandbox.textRescue(a, sandbox.normText(bFull), bp, rescuable);
+  const got = r ? r.note : null;
+  check(`RESCUE ${a.slice(0, 18)}… rescuable=${rescuable}`, got === want, `got=${got}`);
 }
 
 console.log(`\n通过 ${pass} / ${pass + fail}`);

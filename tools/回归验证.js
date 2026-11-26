@@ -32,7 +32,7 @@ const NEEDED = [
   'normText', 'splitItems', 'nums', 'numWithUnit', 'itemSame', 'scoreOverlap',
   'isGroupHeading', 'isBareValue', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'getUnitTable', 'unitFactor', 'parseNumUnit', 'valueWithUnitForField',
-  'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates',
+  'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates', 'textRescue',
   'itemSeqLabel', 'itemBody', 'detailLine', 'statLine', 'formatResult', 'isNeg'
 ];
 function pickFunctions(src, names) {

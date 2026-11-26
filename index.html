@@ -311,6 +311,25 @@ function itemSame(ap,bp){
   }
   return false;
 }
+// 文本一致/近一致兜底（v3.1）：模型没返回或只给待确认时本地救援。
+// 返回 null（不干预）或 {note}。rescuable=false 表示模型已给出有效判定（不覆盖）。
+function textRescue(aText, nbFull, bpText, rescuable){
+  if(!rescuable) return null;
+  const na=normText(aText);
+  // ① 逐字包含：A 原文（≥6字符，滤掉纯序号）出现在 B 全文。前一字是 不/非 则跳过（防"不支持XX"包住"支持XX"）。
+  if(na.length>=6 && !/^[0-9、.．\s]+$/.test(na)){
+    let idx=-1;
+    while((idx=nbFull.indexOf(na, idx+1))!==-1){
+      const prev=idx>0?nbFull[idx-1]:'';
+      if(prev!=='不'&&prev!=='非') return {note:'响应文本与要求一致'};
+    }
+  }
+  // ② 近一致：A 无数值要求（≥/≤/不低于…的必须走数值裁决）且与配对 B 条目相似度≥0.75。
+  if(!/≥|≤|不低于|不小于|不少于|至少|不超过|大于|小于|以上|以内/.test(aText) && bpText && scoreOverlap(aText,bpText)>=0.75){
+    return {note:'响应内容与要求基本一致'};
+  }
+  return null;
+}
 // 本地确定性判定：A/B 归一化一致 → 该条目匹配
 /* ============ v2.0 逐条状态装配 ============
    模型给出每条状态；本地确定性规则做最终裁决（文本一致/数值边界）。
@@ -366,6 +385,14 @@ function buildItemStates(p,g){
         note='';
       }
     }
+    // 1.5/1.6) 文本一致兜底（v3.1）：模型没返回或只给了待确认时，本地直接判。
+    //   ① A 条目原文逐字出现在 B → B 照抄招标要求 = 承诺，判匹配（实测一次跑批 82 条
+    //      "AI 未返回判定"里 12 条属此类，根本不该丢给模型）；
+    //   ② 近一致：B 抄 A 只改少量字（加"支持"前缀/换标点），2-gram≥0.75 且 A 无数值要求。
+    //      有 ≥/≤/不低于 的必须走数值裁决——"内存≥8GB" vs "内存4GB" 相似度同样很高，
+    //      按相似度判匹配会掩盖负偏离。防"不支持XX"包含"支持XX"：命中前一字是 不/非 则跳过。
+    const rescue=textRescue(it.text, nb, bp?bp.text:'', (!m || status==='uncertain' || status==='pending'));
+    if(rescue){ status='matched'; note=rescue.note; conf=null; }
     // 3) B 中找不到任何相关内容 → 待确认（需求明确要求）
     if(!bp && !hasAnyCounterpart(p.b,it.text)){
       status='uncertain';
