@@ -80,6 +80,13 @@ def _make_ssl_context():
     try:
         ctx = ssl.create_default_context()
         ctx.load_verify_locations(cadata=_ISRG_ROOTS)
+        # 精简系统/框架 Python 常缺 CA 根证书库（macOS 框架版、Windows 精简版），
+        # 火山（DigiCert 链）会报 CERTIFICATE_VERIFY_FAILED。certifi 可用时追加加载。
+        try:
+            import certifi
+            ctx.load_verify_locations(certifi.where())
+        except Exception:
+            pass
         return ctx
     except Exception as e:
         sys.stderr.write(f"[tls] 构建 TLS 上下文失败，回退系统默认: {e}\n")
@@ -201,6 +208,20 @@ def _pool(key, fallback):
 
 MODEL_POOL = _pool("LLM_MODEL_POOL", MODEL)
 VERIFY_POOL = _pool("LLM_VERIFY_POOL", VERIFY_MODEL) or MODEL_POOL
+# 模型选择（前端「上传与配置」枚举，请求体带 poolMode）：
+#   gpt（默认，慢但准）——初判走 MODEL_POOL（tf:gpt 优先），核验走 VERIFY_POOL（国内优先）
+#   cn（快，国内火山）——初判走 MODEL_POOL 剔除 tf: 后的国内池，核验走 tf: 池，仍保持异构复核
+_TF_SUBPOOL = [m for m in MODEL_POOL if str(m).startswith("tf:")]
+_CN_SUBPOOL = [m for m in MODEL_POOL if not str(m).startswith("tf:")]
+
+
+def _pick_pool(role, pool_mode):
+    if pool_mode == "cn":
+        if role == "verify":
+            return _TF_SUBPOOL if _TF_SUBPOOL else VERIFY_POOL
+        return _CN_SUBPOOL if _CN_SUBPOOL else MODEL_POOL
+    return VERIFY_POOL if role == "verify" else MODEL_POOL
+
 DEAD_FILE = BASE / "model_deadlist.json"
 _dead_lock = threading.Lock()
 # 黑名单自动复活：任何拉黑都有有效期，到点自动重试。
@@ -293,6 +314,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "model_pool": MODEL_POOL,
                 "verify_pool": VERIFY_POOL,
                 "providers": {"primary": PROVIDER, "extra": sorted(_EXTRA_PROVIDERS.keys())},
+                "cn_grade_pool": _CN_SUBPOOL,
+                "cn_verify_pool": _TF_SUBPOOL,
                 "dead_models": list(dead_now.keys()),
                 "dead_details": dead_now,
                 "dead_ttl_sec": DEAD_TTL_SEC,
@@ -361,12 +384,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(400, {"error": "BAD_REQUEST", "message": "缺少 messages"})
                 return
             role = data.get("role") or ""
+            pool_mode = data.get("poolMode") or "gpt"
         except Exception as e:
             self._json(400, {"error": "BAD_REQUEST", "message": str(e)})
             return
 
         # 按池顺序调用；429 / 模型未开通即拉黑该模型并自动切下一个，直到成功或全部耗尽。
-        pool = VERIFY_POOL if role == "verify" else MODEL_POOL
+        pool = _pick_pool(role, pool_mode)
         candidates = [m for m in pool if m not in _load_dead()]
         if not candidates:
             _save_dead({})

@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.2.5] - 2026-11-26 · 判定模型选择（gpt / 国内）+ 本地 TLS 修复
+
+### 改动
+- **前端「上传与配置」新增「判定模型」枚举**（记忆上次选择）：
+  - `（慢但准）gpt`（默认）：判定走 tf:gpt 池，核验走国内池（doubao 优先）——即原有行为；
+  - `（快）国内模型`：判定走火山国内池（剔除 tf:），核验走 tf:gpt 池——两种模式都保持异构复核。
+- **server.py**：/api/grade 请求体新增 `poolMode`（"gpt"|"cn"），`_pick_pool(role, pool_mode)` 按模式选池；子池从 MODEL_POOL 按 `tf:` 前缀派生，无需改 .env。/health 新增 `cn_grade_pool` / `cn_verify_pool`。
+- **server.py TLS 修复**：macOS 框架版 Python 无系统 CA 库，火山（DigiCert 链）报 CERTIFICATE_VERIFY_FAILED（此前只有 tokenfuture 因内嵌 ISRG 根可通）。`_make_ssl_context()` 追加加载 certifi 证书包（有则用，无则跳过）。生产 ECS 不受影响，本地服务受益。
+
+### 验证
+- 本地起 8799 端口真实打上游，四组合全命中：gpt 判定→gpt-6.2-sol；cn 判定→deepseek-v4-1-flash-economy；cn 核验→tf:gpt-6.2-sol；gpt 核验→doubao-seed-evolving。
+- server.py py_compile 通过；index.html 内嵌脚本 node --check 通过。
+
+### 部署
+- 前端免连服务器（自动同步）；**server.py 有改动，需连服务器更新并重启 python**。
+
+---
+
 ## [3.2.4] - 2026-11-26 · 单轮提速（前端）+ 移除底部小字
 
 ### 背景
