@@ -21,8 +21,10 @@ $logFile = Join-Path $dir 'autoupdate.log'
 $cur = ''
 if (Test-Path $shaFile) { $cur = (Get-Content $shaFile -Raw).Trim() }
 
-# 1) fetch the version pointer, first reachable mirror wins.
-# Random query string busts the CDN cache for @main paths.
+# 1) fetch the version pointer from ALL mirrors and take the first value that
+#    differs from the currently installed one. Mirrors serve @main from cache and
+#    ignore cache-busting query strings, so "first reachable wins" can stick to a
+#    stale SHA for hours; requiring a DIFFERENT SHA skips stale mirrors instead.
 $t = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $new = $null
 foreach ($m in $mirrors) {
@@ -31,14 +33,13 @@ foreach ($m in $mirrors) {
       $r = Invoke-WebRequest -Uri "$m@main/deploy/prod.txt$suffix" -UseBasicParsing -TimeoutSec 20
       if ($r.StatusCode -eq 200) {
         $c = $r.Content.Trim()
-        if ($c -match '^[0-9a-f]{40}$') { $new = $c; break }
+        if ($c -match '^[0-9a-f]{40}$' -and $c -ne $cur) { $new = $c; break }
       }
     } catch {}
   }
   if ($new) { break }
 }
-if (-not $new) { exit 0 }        # pointer unreachable -> keep current version
-if ($new -eq $cur) { exit 0 }    # already up to date
+if (-not $new) { exit 0 }        # all mirrors agree with current version (or unreachable)
 
 # 2) download index.html pinned to the exact SHA
 $tmp = Join-Path $env:TEMP 'idx_auto.html'
