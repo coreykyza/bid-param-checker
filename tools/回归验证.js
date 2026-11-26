@@ -93,6 +93,23 @@ const MODEL_NAME = cfg('LLM_MODEL', 'DEEPSEEK_MODEL', 'ZHIPU_MODEL') || 'glm-4-f
 const VERIFY_MODEL = cfg('LLM_VERIFY_MODEL') || MODEL_NAME;
 const THINKING = cfg('LLM_THINKING');
 const BASE = cfg('LLM_BASE_URL');
+// 多 provider：与 server.py 同一套规则。池条目 `tag:model` 走附加 provider。
+const EXTRA = {};
+for (const tag of ['bailian', 'bailian_kimi']) {
+  let k = cfg(`LLM_${tag.toUpperCase()}_API_KEY`);
+  let u = cfg(`LLM_${tag.toUpperCase()}_BASE_URL`);
+  if (!k && tag === 'bailian_kimi') { k = cfg('LLM_BAILIAN_API_KEY'); u = cfg('LLM_BAILIAN_BASE_URL'); }
+  if (k && u) {
+    if (!u.replace(/\/$/, '').endsWith('/chat/completions')) u = u.replace(/\/$/, '') + '/chat/completions';
+    EXTRA[tag] = { key: k, url: u, thinking: cfg(`LLM_${tag.toUpperCase()}_THINKING`) };
+  }
+}
+function resolve(model) {
+  let tag = '', real = model;
+  if (model.includes(':')) { [tag, real] = model.split(':', 2); tag = tag.toLowerCase(); }
+  if (tag && EXTRA[tag]) return { real, ...EXTRA[tag] };
+  return { real, key: KEY, url: API, thinking: THINKING };
+}
 // 自动路由：与 server.py 共用同一份拉黑名单，429 自动切下一个模型
 const DEAD_FILE = path.join(ROOT, 'model_deadlist.json');
 const loadDead = () => { try { return JSON.parse(fs.readFileSync(DEAD_FILE, 'utf8')); } catch (e) { return {}; } };
@@ -123,26 +140,33 @@ async function callWithFallback(pool, body) {
   let candidates = pool.filter(m => !dead[m]);
   if (!candidates.length) { fs.writeFileSync(DEAD_FILE, '{}'); candidates = [...pool]; }
   let last = null;
-  for (const model of candidates) {
+  for (const entry of candidates) {
+    const { real, key, url, thinking } = resolve(entry);
+    const msg = { ...body, model: real };
+    if (thinking === 'enabled' || thinking === 'disabled') msg.thinking = { type: thinking };
+    else if (thinking === 'kimi') { msg.temperature = 0.6; msg.thinking = { type: 'disabled' }; }
+    else if (thinking === 'qwen-no-think') msg.enable_thinking = false;
     try {
-      const resp = await fetch(API, {
+      const resp = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
-        body: JSON.stringify({ ...body, model }),
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify(msg),
         signal: AbortSignal.timeout(120000)
       });
       if (!resp.ok) {
         const detail = (await resp.text()).slice(0, 300);
-        if (resp.status === 429) {
-          markDead(model, `HTTP 429: ${detail}`);
-          console.log(`\n  ⚠ ${model} 额度耗尽，自动切换下一个`);
-          last = new Error(`HTTP 429 ${detail}`);
+        if (resp.status === 429 || (resp.status === 403 && /quota exhausted|免费额度|not activated/i.test(detail))) {
+          markDead(entry, `HTTP ${resp.status}: ${detail}`);
+          console.log(`\n  ⚠ ${entry} 额度耗尽，自动切换下一个`);
+          last = new Error(`HTTP ${resp.status} ${detail}`);
           continue;
         }
         throw new Error('HTTP ' + resp.status + ' ' + detail);
       }
       const data = await resp.json();
-      return data.choices[0].message.content;
+      const content = data.choices[0].message.content;
+      if (!content || !String(content).trim()) throw new Error(`EMPTY_CONTENT ${entry} reasoning可能吃光max_tokens`);
+      return content;
     } catch (e) { last = e; if (String(e.message).startsWith('HTTP ')) throw e; }
   }
   throw last || new Error('模型池全部不可用');
@@ -179,7 +203,6 @@ async function grade(rows) {
       { role: 'user', content: JSON.stringify(payload) }
     ]
   };
-  if (THINKING === 'enabled' || THINKING === 'disabled') body.thinking = { type: THINKING };
   const content = await callWithFallback(MODELS, body);
   const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(clean).results || [];
@@ -214,7 +237,6 @@ async function verify(rows) {
       { role: 'user', content: JSON.stringify(payload) }
     ]
   };
-  if (THINKING === 'enabled' || THINKING === 'disabled') body.thinking = { type: THINKING };
   const content = await callWithFallback(VERIFY_MODELS, body);
   const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(clean).results || [];

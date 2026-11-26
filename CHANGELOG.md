@@ -8,6 +8,30 @@
 
 ---
 
+## [3.0.0] - 2026-11-26 · 多 provider 混合路由（火山 + 百炼免费池）
+
+### 背景
+用户又薅到阿里云百炼免费额度（每个模型 1M tokens，到期日各异），要求按过期时间重排路由、快过期的不要。原 server.py 单 provider（一个 key + 一个 url），无法混用两家。
+
+### 实现
+- **多 provider 配置**：模型池条目支持 `tag:model` 前缀，`_resolve()` 查对应 key/url/thinking。无前缀走主 provider（火山）。附加 provider 用 `LLM_<TAG>_API_KEY` / `_BASE_URL` / `_THINKING` 三件套；当前 `bailian` 和 `bailian_kimi` 两个 tag（后者继承百炼 key、只是 thinking 规则不同）。
+- **thinking 按 provider**：`disabled` → `{"type":"disabled"}`；`kimi` → temperature 改 0.6 + thinking disabled（kimi 只接受 0.6/1）；`qwen-no-think` → `enable_thinking:false`。
+- **403 额度耗尽也拉黑**：百炼免费额度耗尽返回 403 `Free quota exhausted`，纳入自动切换。
+- server.py / 回归脚本共用同一套解析和黑名单；`/health` 增加 `providers` 字段。
+
+### 排序决策（按过期时间从近到远先用掉）
+- 初判池：`bailian:deepseek-v4.1-flash-1017`（52天，实测判定正确）→ `bailian_kimi:kimi-k3.1-pro`（68天）→ `bailian:qwen4-max`（80天）→ 火山 6 个后备。
+- 排除：`qwen3.8-max-0902`（5天）、`deepseek-v4.1-flash`（17天）快过期；`decision-model` 是显示名、API 无此 code（404）。
+- 核验池：火山 `doubao-seed-evolving`（5.5M 兜底）首位 + 百炼 `qwen4-max` 异构第二。
+- 实测：三个百炼模型用项目真实提示词测 `内存≥8GB vs 16GB` 均正确判 positive（简化提示词会误判，已排除干扰）。
+
+### 验证
+- py_compile / node --check 通过；health 显示 9 初判 + 5 核验 + 2 tag、route=auto。
+- 代理层跨 provider 调用成功；resolve 三个 tag 全对（kimi thinking=kimi 生效）。
+- 全量回归 31.1s / 27 行 / 238 条目 / 统计自洽 / 22+5 / 核验降级 0；单位自测 17/17；导出 Excel 5 条验收全过。
+
+---
+
 ## [2.9.1] - 2026-11-25 · 内置默认模型池 + 一条命令更新
 
 ### 问题

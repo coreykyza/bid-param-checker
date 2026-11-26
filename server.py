@@ -42,15 +42,12 @@ def _cfg(*keys, default=""):
     return default
 
 
-# ---- 模型无关配置 ----
-# 优先读通用变量（LLM_*），回退到旧的 ZHIPU_*，保证老 .env 仍能跑。
+# ---- 多 provider 配置 ----
+# 主 provider（默认/旧 .env）：火山方舟。模型池里不带前缀的条目走这里。
 API_KEY = _cfg("LLM_API_KEY", "DEEPSEEK_API_KEY", "ZHIPU_API_KEY")
 MODEL = _cfg("LLM_MODEL", "DEEPSEEK_MODEL", "ZHIPU_MODEL", default="glm-4-flash")
-# AI 核验专家用独立模型（异构盲核，避免同一个模型复核自己）。未配置则回退到初判模型。
-VERIFY_MODEL = _cfg("LLM_VERIFY_MODEL", default="") or MODEL
 PROVIDER = _cfg("LLM_PROVIDER", default="").lower()
 
-# 按 provider 或模型名推断 base url
 _DEFAULT_URLS = {
     "deepseek": "https://api.deepseek.com/v1/chat/completions",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -60,10 +57,8 @@ if not PROVIDER:
         PROVIDER = "deepseek"
     elif MODEL.startswith("glm") or MODEL.startswith("charglm"):
         PROVIDER = "zhipu"
-    elif MODEL.startswith("qwen"):
-        PROVIDER = "qwen"
     else:
-        PROVIDER = "zhipu"
+        PROVIDER = "custom"
 
 API_URL = _cfg("LLM_BASE_URL") or _DEFAULT_URLS.get(PROVIDER) or _DEFAULT_URLS["zhipu"]
 if API_URL and not API_URL.rstrip("/").endswith("/chat/completions"):
@@ -71,6 +66,41 @@ if API_URL and not API_URL.rstrip("/").endswith("/chat/completions"):
 
 # 可选：DeepSeek 支持关闭思考模式提速（"disabled" / "enabled"）
 THINKING = _cfg("LLM_THINKING", default="")
+
+# 附加 provider（如阿里云百炼）：每个 provider 有自己的 key/url/thinking。
+# 模型池条目用 `tag:model` 指定 provider（如 bailian:qwen4-max），无前缀走主 provider。
+# 配置变量：LLM_<TAG>_API_KEY / LLM_<TAG>_BASE_URL / LLM_<TAG>_THINKING
+_EXTRA_PROVIDERS = {}
+for _tag in ("BAILIAN", "BAILIAN_KIMI"):
+    _k = _cfg(f"LLM_{_tag}_API_KEY", default="")
+    _u = _cfg(f"LLM_{_tag}_BASE_URL", default="")
+    if not _k and _tag == "BAILIAN_KIMI":
+        # kimi 专属 tag 未单独配 key 时，继承百炼主 key（只是 thinking 规则不同）
+        _k = _cfg("LLM_BAILIAN_API_KEY", default="")
+        _u = _cfg("LLM_BAILIAN_BASE_URL", default="")
+    if _k and _u:
+        if not _u.rstrip("/").endswith("/chat/completions"):
+            _u = _u.rstrip("/") + "/chat/completions"
+        _EXTRA_PROVIDERS[_tag.lower()] = {
+            "key": _k, "url": _u,
+            "thinking": _cfg(f"LLM_{_tag}_THINKING", default=""),
+        }
+
+
+def _resolve(model):
+    """池条目 → (真实模型名, key, url, thinking)。支持 `bailian:qwen4-max` 前缀。"""
+    tag, real = "", model
+    if ":" in model:
+        tag, real = model.split(":", 1)
+        tag = tag.lower()
+    if tag and tag in _EXTRA_PROVIDERS:
+        p = _EXTRA_PROVIDERS[tag]
+        return real, p["key"], p["url"], p["thinking"]
+    return real, API_KEY, API_URL, THINKING
+
+
+# AI 核验专家用独立模型（异构盲核，避免同一个模型复核自己）。未配置则回退到初判模型。
+VERIFY_MODEL = _cfg("LLM_VERIFY_MODEL", default="") or MODEL
 
 PORT = int(_cfg("PORT", default="8765"))
 
@@ -176,6 +206,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "route": "auto" if len(MODEL_POOL) > 1 else "single",
                 "model_pool": MODEL_POOL,
                 "verify_pool": VERIFY_POOL,
+                "providers": {"primary": PROVIDER, "extra": sorted(_EXTRA_PROVIDERS.keys())},
                 "dead_models": list(_load_dead().keys()),
             })
             return
@@ -216,8 +247,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if supplied != ACCESS_TOKEN:
                 self._json(401, {"error": "UNAUTHORIZED", "message": "访问口令错误或缺失"})
                 return
-        if not API_KEY or API_KEY.startswith("your_"):
-            self._json(400, {"error": "NO_KEY", "message": "服务器未配置 API Key，请在 .env 中填写 LLM_API_KEY"})
+        if not MODEL_POOL:
+            self._json(400, {"error": "NO_KEY", "message": "服务器未配置任何模型池，请在 .env 中填写 LLM_MODEL_POOL"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -240,22 +271,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write("[route] 池内模型全部拉黑，清空黑名单重试一轮\n")
             candidates = list(pool)
         last_error = None
-        for use_model in candidates:
+        for entry in candidates:
+            real_model, use_key, use_url, use_thinking = _resolve(entry)
             payload = {
-                "model": use_model,
+                "model": real_model,
                 "messages": messages,
                 "temperature": 0.1,
                 "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
                 "response_format": {"type": "json_object"},
             }
-            # DeepSeek V4 默认开启思考，结构化判定不需要，关掉更快且不空返回。
-            if THINKING in ("enabled", "disabled"):
-                payload["thinking"] = {"type": THINKING}
+            # 关思考：DeepSeek V4 / 百炼部分模型默认开思考会吃光 max_tokens 导致空返回。
+            # kimi 系列 temperature 必须是 0.6（见 _resolve 对应 provider 配置）。
+            if use_thinking in ("enabled", "disabled"):
+                payload["thinking"] = {"type": use_thinking}
+            elif use_thinking == "kimi":
+                payload["temperature"] = 0.6
+                payload["thinking"] = {"type": "disabled"}
+            elif use_thinking == "qwen-no-think":
+                payload["enable_thinking"] = False
             req = urllib.request.Request(
-                API_URL,
+                use_url,
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 headers={
-                    "Authorization": f"Bearer {API_KEY}",
+                    "Authorization": f"Bearer {use_key}",
                     "Content-Type": "application/json",
                 },
                 method="POST",
@@ -268,9 +306,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", "ignore")[:500]
                 last_error = (e.code, detail)
-                if e.code == 429 or (e.code == 403 and ("not activated" in detail.lower() or "未开通" in detail)):
-                    _mark_dead(use_model, f"HTTP {e.code}: {detail}")
-                    sys.stderr.write(f"[route] {use_model} 额度耗尽/不可用，切换下一个模型\n")
+                if e.code == 429 or (e.code == 403 and ("not activated" in detail.lower() or "未开通" in detail or "quota exhausted" in detail.lower() or "免费额度" in detail)):
+                    _mark_dead(entry, f"HTTP {e.code}: {detail}")
+                    sys.stderr.write(f"[route] {entry} 额度耗尽/不可用，切换下一个模型\n")
                     continue
                 self._json(e.code, {"error": "UPSTREAM_HTTP_ERROR", "status": e.code, "detail": detail})
                 return
