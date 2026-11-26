@@ -121,7 +121,7 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
 <div class="wrap">
   <header>
     <div>
-      <h1>🔍 招投标参数对照工具 <span class="badge">v2.4</span></h1>
+      <h1>🔍 招投标参数对照工具 <span class="badge">v3.2.4</span></h1>
       <div class="sub">上传 Excel → AI 逐行比对招标要求（A列）与投标响应（B列）→ C列输出结论并标红负偏离 → 导出结果</div>
     </div>
     <div id="modeTip" class="mode-tip"></div>
@@ -144,7 +144,7 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
         <div class="opts">
           <div class="opt-row"><span>单次核验行数上限</span><input type="number" id="maxRows" value="100" min="1" max="500"></div>
           <div class="opt-row" style="display:none"><span>每批发送行数</span><input type="number" id="batchSize" value="5" min="1" max="50"></div>
-          <div class="opt-row" style="display:none"><span>并发请求数</span><input type="number" id="concurrency" value="4" min="1" max="10"></div>
+          <div class="opt-row" style="display:none"><span>并发请求数</span><input type="number" id="concurrency" value="6" min="1" max="10"></div>
           <div class="opt-row" style="display:none;margin-bottom:0"><span>代理地址</span><input type="text" id="proxyUrl" value="http://127.0.0.1:8765" style="width:150px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></div>
         </div>
 
@@ -185,7 +185,6 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
     </div>
   </div>
 
-  <footer>产研流程 v2.4 · A列招标要求 / B列投标响应 / C列核验结论 · 数据仅在本机处理，API Key 不进入前端</footer>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -1112,7 +1111,7 @@ $('btnVerify').addEventListener('click',async()=>{
         这些条目根本不需要 AI —— 实测全量 246 条中 64% 可本地判定。
      2) 只把剩下的 pending 条目收集起来，按片并发发请求。
      3) 结果合并后重跑装配（本地规则会再覆盖一次，保证一致性）。*/
-  const CONC = Math.max(1, parseInt($('concurrency')?.value) || 4);
+  const CONC = Math.max(1, parseInt($('concurrency')?.value) || 6);
   const SHARD = 8;
 
   // 阶段一：本地预判（同步，毫秒级）
@@ -1170,9 +1169,18 @@ $('btnVerify').addEventListener('click',async()=>{
     return { p, items: buildItemStates(p, g) };
   });
 
-  // 阶段四：补漏——模型偶发漏返回（尤其短条目），把仍是 pending 的【单条重试一轮】。
-  // 这批量小（几十条），单条请求快，能兜住 glm-4-flash 的长 JSON 漏条问题。
-  // 按【行】聚合而不是单条：只给一条要求、模型缺少上下文，容易宽松判成匹配
+  /* ============ 阶段四/五：补漏 + AI 核验【并行】 ============
+     两者集合不相交：补漏只处理 pending，核验只处理 negative/positive，
+     串行等于白等一个完整网络来回。
+     注意：核验不再直接改条目，统一记录 downgrades，两阶段结束后按 (row,idx) 重放——
+     补漏命中的行会 rebuild items，直接改对象会被覆盖丢掉；
+     重放时若本地裁决已把该条改判（status != prev）则不降级。 */
+  const verifyTargets=[];
+  assembled.forEach(a=>{
+    const idxs=[];
+    a.items.forEach((it,i)=>{ if(it.status==='negative'||it.status==='positive') idxs.push(i); });
+    if(idxs.length) verifyTargets.push({...a, idxs});
+  });
   const missingByRow = new Map();
   assembled.forEach(({ p, items }) => {
     const idxs = [];
@@ -1180,74 +1188,73 @@ $('btnVerify').addEventListener('click',async()=>{
     if (idxs.length) missingByRow.set(p.row, { p, idxs });
   });
   const missing = [...missingByRow.values()];
+  const downgrades=[];   // {row, idx, prev, reason}
+  let mDone=0, vDone=0, vDown=0;
+  const mTotal = missing.reduce((s, m) => s + m.idxs.length, 0);
+  const vTotal = verifyTargets.reduce((s, m) => s + m.idxs.length, 0);
+  pmsg.textContent = `补漏 ${mTotal} 条 + AI 核验 ${vTotal} 条并行中…`;
+
+  const pGrade = missing.length ? runPool(missing, CONC, async (m) => {
+    try {
+      const arr = await aiGradeBatch([{ ...m.p, onlyItems: m.idxs }]);
+      for (const r of arr) {
+        const rowNo = Number(r.row);
+        if (!gradedMap.has(rowNo)) gradedMap.set(rowNo, { row: rowNo, items: [] });
+        const list = Array.isArray(r.items) ? r.items : [];
+        list.forEach((item, k) => {
+          const g = m.idxs[k];
+          item.n = (g != null ? g : m.idxs[0] + k) + 1;
+          gradedMap.get(rowNo).items.push(item);
+        });
+      }
+    } catch (e) { /* 补漏失败就保持待确认 */ }
+    mDone++;
+    pmsg.textContent = `补漏+核验并行中…（补漏 ${mDone}/${missing.length} 行）`;
+  }) : Promise.resolve();
+
+  const pVerify = verifyTargets.length ? runPool(verifyTargets, CONC, async (m) => {
+    try{
+      const statuses=m.idxs.map(i=>m.items[i].status);
+      const notes=m.idxs.map(i=>m.items[i].note||'');
+      const arr=await aiVerifyBatch([{...m.p, onlyItems:m.idxs, statuses, notes}]);
+      for(const r of arr){
+        if(!r) continue;
+        const list=Array.isArray(r.items)?r.items:[];
+        list.forEach((v,k)=>{
+          const idx=m.idxs[k];
+          if(idx==null) return;
+          const it=m.items[idx];
+          if(!it || v.agree!==false) return;   // 默认同意，只有明确反对才进入降级判断
+          const reason=String(v.reason||'').trim();
+          const conf=v.confidence==null?0:Number(v.confidence);
+          if(!reason || conf<0.7) return;      // 无具体理由或置信度不足 → 保留初判
+          downgrades.push({ row: m.p.row, idx, prev: it.status, reason });
+          vDown++;
+        });
+      }
+    }catch(e){ /* 核验异常保留初判，不让核验拖垮整次任务 */ }
+    vDone++;
+    pmsg.textContent = `补漏+核验并行中…（核验 ${vDone}/${verifyTargets.length} 行，降级 ${vDown} 条）`;
+  }) : Promise.resolve();
+
+  await Promise.all([pGrade, pVerify]);
+
+  // 补漏命中的行重新装配（items 数组被重建，索引不变）
   if (missing.length) {
-    const mTotal = missing.reduce((s, m) => s + m.idxs.length, 0);
-    pmsg.textContent = `补漏中…（${mTotal} 条模型未返回，按行重试）`;
-    let mDone = 0;
-    await runPool(missing, CONC, async (m) => {
-      try {
-        const arr = await aiGradeBatch([{ ...m.p, onlyItems: m.idxs }]);
-        for (const r of arr) {
-          const rowNo = Number(r.row);
-          if (!gradedMap.has(rowNo)) gradedMap.set(rowNo, { row: rowNo, items: [] });
-          const list = Array.isArray(r.items) ? r.items : [];
-          list.forEach((item, k) => {
-            const g = m.idxs[k];
-            item.n = (g != null ? g : m.idxs[0] + k) + 1;
-            gradedMap.get(rowNo).items.push(item);
-          });
-        }
-      } catch (e) { /* 补漏失败就保持待确认 */ }
-      mDone++;
-      pmsg.textContent = `补漏中…（${mDone}/${missing.length} 行）`;
-    });
-    // 用补到的结果重新装配
     assembled.forEach(a => {
       const g = gradedMap.get(a.p.row) || { items: [] };
       a.items = buildItemStates(a.p, g);
     });
   }
-
-  /* ============ 阶段五：AI 核验专家（异构复核） ============
-     只核 negative / positive；初判理由带过去但标注"仅供参考"——纯盲核会脑补靶子；
-     跨模型复核（防同源偏差）。
-     严格降级门槛：只有指出【具体矛盾】且 confidence≥0.7 才改待确认，否则保留初判。 */
-  const verifyTargets=[];
-  assembled.forEach(a=>{
-    const idxs=[];
-    a.items.forEach((it,i)=>{ if(it.status==='negative'||it.status==='positive') idxs.push(i); });
-    if(idxs.length) verifyTargets.push({...a, idxs});
-  });
-  if(verifyTargets.length){
-    const vTotal=verifyTargets.reduce((s,m)=>s+m.idxs.length,0);
-    pmsg.textContent=`AI 核验中…（${vTotal} 条有结论条目，盲核）`;
-    let vDone=0, vDown=0;
-    await runPool(verifyTargets, CONC, async (m)=>{
-      try{
-        const statuses=m.idxs.map(i=>m.items[i].status);
-        const notes=m.idxs.map(i=>m.items[i].note||'');
-        const arr=await aiVerifyBatch([{...m.p, onlyItems:m.idxs, statuses, notes}]);
-        for(const r of arr){
-          if(!r) continue;
-          const list=Array.isArray(r.items)?r.items:[];
-          list.forEach((v,k)=>{
-            const idx=m.idxs[k];
-            if(idx==null) return;
-            const it=m.items[idx];
-            if(!it || v.agree!==false) return;   // 默认同意，只有明确反对才进入降级判断
-            const reason=String(v.reason||'').trim();
-            const conf=v.confidence==null?0:Number(v.confidence);
-            if(!reason || conf<0.7) return;      // 无具体理由或置信度不足 → 保留初判
-            const prev=it.status;
-            it.status='uncertain';
-            it.note=`经核验转待确认（原${prev==='negative'?'负偏离':'正偏离'}）：${reason.slice(0,25)}`;
-            it.confidence=0.5;
-            vDown++;
-          });
-        }
-      }catch(e){ /* 核验异常保留初判，不让核验拖垮整次任务 */ }
-      vDone++;
-      pmsg.textContent=`AI 核验中…（${vDone}/${verifyTargets.length} 行，降级 ${vDown} 条）`;
+  // 核验降级重放：只对初判仍成立（未被本地裁决改判）的条目生效
+  if (downgrades.length) {
+    const rowMap = new Map(assembled.map(a => [a.p.row, a]));
+    downgrades.forEach(d => {
+      const a = rowMap.get(d.row); if (!a) return;
+      const it = a.items[d.idx]; if (!it || it.status !== d.prev) return;
+      it.status = 'uncertain';
+      it.note = `经核验转待确认（原${d.prev==='negative'?'负偏离':'正偏离'}）：${d.reason.slice(0,25)}`;
+      it.confidence = 0.5;
     });
   }
 

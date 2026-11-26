@@ -94,14 +94,16 @@ const VERIFY_MODEL = cfg('LLM_VERIFY_MODEL') || MODEL_NAME;
 const THINKING = cfg('LLM_THINKING');
 const BASE = cfg('LLM_BASE_URL');
 // 多 provider：与 server.py 同一套规则。池条目 `tag:model` 走附加 provider。
+// 启用的 tag 由 LLM_EXTRA_TAGS 列出（v3.2.0 起，勿再硬编码 tag 清单）。
 const EXTRA = {};
-for (const tag of ['bailian', 'bailian_kimi']) {
-  let k = cfg(`LLM_${tag.toUpperCase()}_API_KEY`);
-  let u = cfg(`LLM_${tag.toUpperCase()}_BASE_URL`);
-  if (!k && tag === 'bailian_kimi') { k = cfg('LLM_BAILIAN_API_KEY'); u = cfg('LLM_BAILIAN_BASE_URL'); }
+for (const tag of String(cfg('LLM_EXTRA_TAGS') || 'BAILIAN,BAILIAN_KIMI').split(',').map(s => s.trim()).filter(Boolean)) {
+  const U = tag.toUpperCase();
+  let k = cfg(`LLM_${U}_API_KEY`);
+  let u = cfg(`LLM_${U}_BASE_URL`);
+  if (!k && U === 'BAILIAN_KIMI') { k = cfg('LLM_BAILIAN_API_KEY'); u = cfg('LLM_BAILIAN_BASE_URL'); }
   if (k && u) {
     if (!u.replace(/\/$/, '').endsWith('/chat/completions')) u = u.replace(/\/$/, '') + '/chat/completions';
-    EXTRA[tag] = { key: k, url: u, thinking: cfg(`LLM_${tag.toUpperCase()}_THINKING`) };
+    EXTRA[tag.toLowerCase()] = { key: k, url: u, thinking: cfg(`LLM_${U}_THINKING`) };
   }
 }
 function resolve(model) {
@@ -155,9 +157,24 @@ async function callWithFallback(pool, body) {
       });
       if (!resp.ok) {
         const detail = (await resp.text()).slice(0, 300);
-        if (resp.status === 429 || (resp.status === 403 && /quota exhausted|免费额度|not activated/i.test(detail))) {
+        const low = detail.toLowerCase();
+        const quotaGone = /quota|insufficient|balance|exhausted|expired|out of credit|no credit|额度|余额|欠费|用尽|已用完/.test(low);
+        if (resp.status === 429 && !quotaGone) {
+          // 纯并发限流：本轮跳过，不拉黑（对齐 server.py v3.2.3）
+          console.log(`\n  ⚠ ${entry} 瞬时 429 限流，本轮跳过（不拉黑）`);
+          last = new Error(`HTTP 429 ${detail}`);
+          continue;
+        }
+        if (resp.status === 429 || (resp.status === 403 && quotaGone)) {
           markDead(entry, `HTTP ${resp.status}: ${detail}`);
           console.log(`\n  ⚠ ${entry} 额度耗尽，自动切换下一个`);
+          last = new Error(`HTTP ${resp.status} ${detail}`);
+          continue;
+        }
+        if (resp.status === 404 || resp.status === 401) {
+          // 模型不存在/鉴权失败：拉黑后切下一个（对齐 server.py v3.2.3）
+          markDead(entry, `HTTP ${resp.status}: ${detail}`);
+          console.log(`\n  ⚠ ${entry} 不可用（HTTP ${resp.status}），自动切换下一个`);
           last = new Error(`HTTP ${resp.status} ${detail}`);
           continue;
         }
