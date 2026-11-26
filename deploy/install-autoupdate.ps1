@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $dir  = 'C:\bidcheck'
-$sha  = 'AUTO_UPDATE_INSTALL_SHA'
+$sha  = 'fde77104351750c03bffb685da9f29d87340336d'
 $base = 'https://cdn.jsdmirror.com/gh/coreykyza/bid-param-checker'
 $dst  = Join-Path $dir 'auto-update.ps1'
 
