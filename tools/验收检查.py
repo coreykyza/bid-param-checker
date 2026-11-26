@@ -115,7 +115,10 @@ for r, text, a in rows:
             if not m:
                 continue  # 无序号条目不校验
             seq = m.group(1)
-            if seq not in a:
+            # v3.2.2：【】格式升级为「章节·序号」（如 一、脑电波采集交互·2），
+            # 两部分都必须能在 A 列原文找到
+            parts = [p for p in seq.split("·") if p.strip()]
+            if not all(p in a for p in parts):
                 bad3.append((r, seq))
 if bad3:
     for r, seq in bad3[:10]:

@@ -59,7 +59,7 @@ input[type=file]{display:none}
 .progress .bar{height:7px;background:#eef2f7;border-radius:5px;overflow:hidden}
 .progress .bar i{display:block;height:100%;background:var(--primary);width:0%;transition:width .25s;border-radius:5px}
 .progress .txt{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px}
 .stat{background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:11px 12px}
 .stat .n{font-size:20px;font-weight:700;line-height:1.2}
 .stat .l{font-size:11px;color:var(--muted);margin-top:2px}
@@ -261,7 +261,7 @@ function splitItems(text){
     const cn=t.match(/^([一二三四五六七八九十百]+)\s*[、.．]\s*(.*)$/);
     if(cn && /^[一二三四五六七八九十百]+$/.test(cn[1])){
       // 若逗号后紧跟数字（如"二、1、屏幕支持触控"），这是二级序号条目，不是章节标题
-      if(!/^\s*\d/.test(cn[2])){ section=cn[1]; return; }
+      if(!/^\s*\d/.test(cn[2])){ section=`${cn[1]}、${cn[2].trim()}`; return; }
     }
     const bracket=t.match(/^【(.+?)】$/);
     if(bracket){ section=bracket[1]; return; }
@@ -444,6 +444,7 @@ function buildItemStates(p,g){
     if(!['matched','positive','negative','uncertain'].includes(status)) status = m ? 'uncertain' : 'pending';
     if(status==='uncertain'&&conf==null) conf=0.5;
     out.push({seq:it.seq,seqRaw:it.seqRaw,text:it.text,status,note,confidence:conf,
+              section:String(it.section||'').trim(),
               bText:bp?bp.text:''});
   });
   return out;
@@ -1079,6 +1080,7 @@ async function aiVerifyBatch(pairs,attempt=1){
 $('btnVerify').addEventListener('click',async()=>{
   if(S.busy||!S.rows.length) return;
   S.busy=true; $('btnVerify').disabled=true; $('btnExport').disabled=true;
+  const tStart=Date.now();   // 本次核验总耗时（供头部卡片展示）
   const cap=parseInt($('maxRows').value)||100;
   const batch=parseInt($('batchSize').value)||10;
   const rows=S.rows.slice(0,cap), truncated=S.rows.length-cap;
@@ -1263,6 +1265,7 @@ $('btnVerify').addEventListener('click',async()=>{
     });
   }
   done = rows.length;
+  S.elapsed=(Date.now()-tStart)/1000;   // 秒，保留 1 位小数在头部卡片展示
   pbar.style.width = '100%'; ppct.textContent = '100%';
 
   if(truncated>0) toast(`已完成 ${rows.length} 行，超出上限的 ${truncated} 行未核验`);
@@ -1288,8 +1291,16 @@ $('btnVerify').addEventListener('click',async()=>{
 // 条目的显示文本（截断与归一化）——高亮匹配必须用同一份，否则长文本截断了就匹配不上
 /* ============ v2.0 输出格式化（严格按需求基线） ============ */
 // 条目序号显示：原文有序号 → 【1、】【二、1】；无序号 → 不加【】
+// v3.2.2：A 列含二级标题（章节）时，【】里带出章节名，形如
+// 【一、脑电波采集交互·2】——多章节下序号各自从 1 重新编号，只写【2】无法对应到哪一节。
+// 章节名与序号都取自 A 列原文（用 · 分隔），两侧均可在原文中检索。
 function itemSeqLabel(it){
-  return it.seqRaw ? `【${it.seqRaw}】` : '';
+  const sec=String(it&&it.section||'').trim();
+  const seq=String(it&&it.seqRaw||'').trim();
+  if(seq&&sec) return `【${sec}·${seq}】`;
+  if(seq) return `【${seq}】`;
+  if(sec) return `【${sec}】`;
+  return '';
 }
 // 条目正文（原文摘录，去掉首尾空白，保留内部空格）
 function itemBody(it){
@@ -1478,6 +1489,7 @@ function renderTable(preview){
     <div class="stats">
       <div class="stat"><div class="n">${S.results.length}</div><div class="l">核验行数</div></div>
       <div class="stat"><div class="n">${totalItems}</div><div class="l">核验条数</div><div class="sub">A列拆分后的核验条目</div></div>
+      <div class="stat"><div class="n">${S.elapsed!=null?S.elapsed.toFixed(1)+'s':'—'}</div><div class="l">核验耗时</div><div class="sub">开始→出结果总时长</div></div>
       <div class="stat neg"><div class="n">${neg}</div><div class="l">含负偏离</div><div class="sub">负偏离 ${negItems} 条</div></div>
       <div class="stat unc"><div class="n">${unc}</div><div class="l">含待确认</div><div class="sub">待确认 ${uncItems} 条</div></div>
       <div class="stat pos"><div class="n">${ok}</div><div class="l">全部满足行</div><div class="sub">匹配/正偏离 ${okItems} 条</div></div>
