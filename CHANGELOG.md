@@ -359,3 +359,11 @@ v2.9 更新脚本需要往服务器 `.env` 写入长模型池配置。用户粘�
 - 结果 Excel 导出
 - 演示模式（无 Key / 代理未启动）
 - 零依赖本地代理（Python 标准库）
+
+## v3.2.0 (2026-11-26)
+### Added
+- TokenFuture（tokenfuture.si，OpenAI 兼容）作为附加 provider：LLM_EXTRA_TAGS 通用化（原先硬编码 BAILIAN 两 tag），新 provider 只需 .env 配置无需改代码
+- 判定池：tf:gpt-6.2-sol / 6.1 / 5.6 三连优先，火山 6 模型全量兜底（429/宕机自动拉黑切换，deadlist 持久化）
+- 核验池：doubao-seed-evolving 异构优先（核验须与初判异构），tf:gpt-6.1-sol 后备
+### Verified
+- gpt-6.2-sol 用项目真实 SYSTEM_PROMPT 判定 5/5 全对（型号低于=negative、16GB 边界=matched、5年质保=positive），响应格式与项目 JSON 结构一致，response_format json_object 兼容

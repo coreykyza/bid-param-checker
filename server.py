@@ -67,11 +67,11 @@ if API_URL and not API_URL.rstrip("/").endswith("/chat/completions"):
 # 可选：DeepSeek 支持关闭思考模式提速（"disabled" / "enabled"）
 THINKING = _cfg("LLM_THINKING", default="")
 
-# 附加 provider（如阿里云百炼）：每个 provider 有自己的 key/url/thinking。
-# 模型池条目用 `tag:model` 指定 provider（如 bailian:qwen4-max），无前缀走主 provider。
-# 配置变量：LLM_<TAG>_API_KEY / LLM_<TAG>_BASE_URL / LLM_<TAG>_THINKING
+# 附加 provider（如阿里云百炼、TokenFuture）：每个 provider 有自己的 key/url/thinking。
+# 模型池条目用 `tag:model` 指定 provider（如 tf:gpt-6.2-sol），无前缀走主 provider。
+# 启用的 tag 由 LLM_EXTRA_TAGS 列出（逗号分隔），配置变量：LLM_<TAG>_API_KEY / LLM_<TAG>_BASE_URL / LLM_<TAG>_THINKING
 _EXTRA_PROVIDERS = {}
-for _tag in ("BAILIAN", "BAILIAN_KIMI"):
+for _tag in [t.strip().upper() for t in _cfg("LLM_EXTRA_TAGS", default="BAILIAN,BAILIAN_KIMI").split(",") if t.strip()]:
     _k = _cfg(f"LLM_{_tag}_API_KEY", default="")
     _u = _cfg(f"LLM_{_tag}_BASE_URL", default="")
     if not _k and _tag == "BAILIAN_KIMI":
