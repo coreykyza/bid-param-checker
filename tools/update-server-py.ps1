@@ -1,4 +1,4 @@
-# bid-param-checker v3.2.9 后端更新（只更 server.py，绝不动 .env）
+# bid-param-checker v3.2.10 后端更新（只更 server.py，绝不动 .env）
 #
 # 用途：v3.2.9 改了 server.py（provider 并发闸 + 限流熔断 + SetLimitExceeded 识别），
 #   后端改动无法靠前端的自动同步脚本生效，必须在 Windows ECS 上手动执行一次。
@@ -6,7 +6,7 @@
 # 【怎么执行】不要用 iex(iwr...).Content —— CDN 用 application/octet-stream 返回，
 #   PowerShell 的 .Content 是 byte[]，iex 会报「无法将 System.Byte[] 转换为 System.String」。
 #   正确姿势（先落盘再执行）：
-#     iwr 'https://cdn.jsdmirror.com/gh/coreykyza/bid-param-checker@v3.2.9/tools/update-server-py.ps1' -OutFile $env:TEMP\upd.ps1 -UseBasicParsing
+#     iwr 'https://cdn.jsdmirror.com/gh/coreykyza/bid-param-checker@v3.2.10/tools/update-server-py.ps1' -OutFile $env:TEMP\upd.ps1 -UseBasicParsing
 #     powershell -ExecutionPolicy Bypass -File $env:TEMP\upd.ps1
 #
 # 【重要】旧脚本 tools/update-server-v3.ps1 会重写 .env 的模型池（把 tf: 池冲成 bailian 池），
@@ -35,10 +35,10 @@ Write-Host ("python: " + $py)
 
 # 多镜像轮询（ECS 出站到 cdn.jsdelivr.net 曾被持续重置 → 首选 jsdmirror）
 $mirrors = @(
-  'https://cdn.jsdmirror.com/gh/coreykyza/bid-param-checker@v3.2.9/server.py',
-  'https://cdn.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.9/server.py',
-  'https://fastly.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.9/server.py',
-  'https://testingcf.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.9/server.py'
+  'https://cdn.jsdmirror.com/gh/coreykyza/bid-param-checker@v3.2.10/server.py',
+  'https://cdn.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.10/server.py',
+  'https://fastly.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.10/server.py',
+  'https://testingcf.jsdelivr.net/gh/coreykyza/bid-param-checker@v3.2.10/server.py'
 )
 
 Write-Host '[1/4] 备份现有 server.py ...'
@@ -57,14 +57,14 @@ foreach ($m in $mirrors) {
   try {
     Invoke-WebRequest $m -OutFile $tmp -UseBasicParsing -TimeoutSec 25 -ErrorAction Stop
     $len = (Get-Item $tmp).Length
-    # 校验：字节数合理 + 含关键新代码（并发闸）+ 是 python 源码
+    # 校验：字节数合理 + 含关键新代码（并发闸 + 退避诊断）+ 是 python 源码
     $txt = Get-Content $tmp -Raw -Encoding UTF8
-    if ($len -gt 20000 -and $txt -like '*_provider_try_acquire*' -and $txt -like '*def do_POST*') {
-      Write-Host ("  OK  {0}  ({1} 字节，含并发闸特征)" -f $m, $len)
+    if ($len -gt 20000 -and $txt -like '*_provider_try_acquire*' -and $txt -like '*last_route_errors*' -and $txt -like '*def do_POST*') {
+      Write-Host ("  OK  {0}  ({1} 字节，含并发闸+退避诊断特征)" -f $m, $len)
       $ok = $true
       break
     } else {
-      Write-Host ("  内容校验失败（{0} 字节，缺并发闸特征？）→ 换镜像" -f $len)
+      Write-Host ("  内容校验失败（{0} 字节，缺并发闸/退避特征）→ 换镜像" -f $len)
     }
   } catch {
     Write-Host ("  失败 {0} → {1}" -f $m, $_.Exception.Message)
