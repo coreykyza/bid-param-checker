@@ -121,7 +121,7 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
 <div class="wrap">
   <header>
     <div>
-      <h1>🔍 招投标参数对照工具 <span class="badge">v3.2.6</span></h1>
+      <h1>🔍 招投标参数对照工具 <span class="badge">v3.2.7</span></h1>
       <div class="sub">上传 Excel → AI 逐行比对招标要求（A列）与投标响应（B列）→ C列输出结论并标红负偏离 → 导出结果</div>
     </div>
     <div id="modeTip" class="mode-tip"></div>
@@ -142,8 +142,7 @@ details pre{background:#0f172a;color:#cbd5e1;padding:14px;border-radius:8px;over
         <div class="fileinfo" id="fileinfo"></div>
 
         <div class="opts">
-          <div class="opt-row"><span>判定模型</span><select id="modelMode" style="width:150px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff"><option value="gpt">（慢但准）gpt</option><option value="cn">（快）国内模型</option></select></div>
-          <div style="color:var(--muted);font-size:11px;margin:-2px 0 8px">仅控制判定模型；核验固定使用国内（火山）模型</div>
+          <div class="opt-row"><span>判定模型</span><select id="modelMode" style="width:150px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:#fff"><option value="cn">（快）国内模型</option><option value="gpt">（慢但准）gpt</option></select></div>
           <div class="opt-row"><span>单次核验行数上限</span><input type="number" id="maxRows" value="100" min="1" max="500"></div>
           <div class="opt-row" style="display:none"><span>每批发送行数</span><input type="number" id="batchSize" value="5" min="1" max="50"></div>
           <div class="opt-row" style="display:none"><span>并发请求数</span><input type="number" id="concurrency" value="6" min="1" max="10"></div>
@@ -997,8 +996,8 @@ function accessHeaders(){
 /* 模型选择：只控制【判定】模型。gpt=判定走 tf:gpt 池（慢但准）；cn=判定走国内火山池（快）。
    【核验】恒定走国内(火山)池，与下拉无关，服务端固定，故核验请求不带 poolMode。记忆用户上次选择。 */
 function poolMode(){
-  const v = localStorage.getItem('modelMode') || 'gpt';
-  return (v === 'cn') ? 'cn' : 'gpt';
+  const v = localStorage.getItem('modelMode') || 'cn';
+  return (v === 'gpt') ? 'gpt' : 'cn';
 }
 (async()=>{
   try{ const el=$('modelMode'); if(el){ el.value = poolMode(); el.addEventListener('change',()=>localStorage.setItem('modelMode', el.value)); } }catch(e){}
@@ -1505,12 +1504,12 @@ function renderTable(preview){
   const okItems=S.results.filter(r=>r.overall==='全部满足').reduce((s,r)=>s+(r.total||0),0);
   body.innerHTML=`
     <div class="stats">
-      <div class="stat"><div class="n">${S.results.length}</div><div class="l">核验行数</div></div>
+      <div class="stat"><div class="n">${S.results.length}</div><div class="l">核验项目数</div></div>
       <div class="stat"><div class="n">${totalItems}</div><div class="l">核验条数</div><div class="sub">A列拆分后的核验条目</div></div>
       <div class="stat"><div class="n">${S.elapsed!=null?S.elapsed.toFixed(1)+'s':'—'}</div><div class="l">核验耗时</div><div class="sub">开始→出结果总时长</div></div>
-      <div class="stat neg"><div class="n">${neg}</div><div class="l">含负偏离</div><div class="sub">负偏离 ${negItems} 条</div></div>
-      <div class="stat unc"><div class="n">${unc}</div><div class="l">含待确认</div><div class="sub">待确认 ${uncItems} 条</div></div>
-      <div class="stat pos"><div class="n">${ok}</div><div class="l">全部满足行</div><div class="sub">匹配/正偏离 ${okItems} 条</div></div>
+      <div class="stat neg"><div class="n">${neg}</div><div class="l">含负偏离项目数</div><div class="sub">负偏离 ${negItems} 条</div></div>
+      <div class="stat unc"><div class="n">${unc}</div><div class="l">含待确认项目数</div><div class="sub">待确认 ${uncItems} 条</div></div>
+      <div class="stat pos"><div class="n">${ok}</div><div class="l">全部满足项目数</div><div class="sub">匹配/正偏离 ${okItems} 条</div></div>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>行</th><th>A · 招标要求</th><th>B · 投标响应</th><th>C · 核验结论</th></tr></thead><tbody>
     ${S.results.map(r=>{
