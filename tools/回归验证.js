@@ -412,19 +412,20 @@ async function verify(rows) {
 
   const results = [];
   for (const { p, items } of assembled) {
+    // 仍为 pending 的（AI 未返回/接口超时/分片异常）→ 未判定（系统异常态）
     items.forEach(it => {
       if (it.status === 'pending') {
-        it.status = 'uncertain';
+        it.status = 'unjudged';
         it.note = it.note || 'AI 未返回判定，需人工复核';
-        it.confidence = it.confidence == null ? 0.5 : it.confidence;
+        it.confidence = null;
       }
     });
-    const cnt = { matched: 0, positive: 0, negative: 0, uncertain: 0 };
+    const cnt = { matched: 0, positive: 0, negative: 0, uncertain: 0, unresponded: 0, unjudged: 0 };
     items.forEach(it => cnt[it.status]++);
-    const overall = (cnt.negative === 0 && cnt.uncertain === 0) ? '全部满足' : '部分满足';
+    const overall = (cnt.negative === 0 && cnt.uncertain === 0 && cnt.unresponded === 0 && cnt.unjudged === 0) ? '全部满足' : '部分满足';
     const rec = {
       row: p.row, a: p.a, b: p.b, overall, cnt,
-      total: cnt.matched + cnt.positive + cnt.negative + cnt.uncertain,
+      total: cnt.matched + cnt.positive + cnt.negative + cnt.uncertain + cnt.unresponded + cnt.unjudged,
       items: items.map(it => ({
         seqRaw: it.seqRaw, text: it.text, status: it.status,
         note: it.note, confidence: it.confidence
@@ -445,7 +446,7 @@ async function verify(rows) {
     全部满足: results.filter(r => r.overall === '全部满足').length,
     部分满足: results.filter(r => r.overall === '部分满足').length,
     条目总数: results.reduce((s, r) => s + r.total, 0),
-    统计自洽: results.every(r => r.total === r.cnt.matched + r.cnt.positive + r.cnt.negative + r.cnt.uncertain)
+    统计自洽: results.every(r => r.total === r.cnt.matched + r.cnt.positive + r.cnt.negative + r.cnt.uncertain + (r.cnt.unresponded || 0) + (r.cnt.unjudged || 0))
   };
   console.log('\n=== 汇总 ===');
   console.log(JSON.stringify(stat, null, 2));

@@ -49,8 +49,12 @@ for r in range(2, ws.max_row + 1):
 print(f"文件：{path}")
 print(f"有结论的行数：{len(rows)}\n")
 
-# ---- 标准1：统计行四个数字之和 == 共N项的 N ----
-print("【验收1】统计自洽（四数之和 == 总项数）")
+# v3.2.8 状态机：负偏离/未响应/待确认/未判定/匹配/正偏离（统计行固定顺序，含 0 也列出）
+STAT_KEYS = ("负偏离", "未响应", "待确认", "未判定", "匹配", "正偏离")
+DETAIL_KEYS = ("负偏离", "未响应", "待确认", "未判定")
+
+# ---- 标准1：统计行数字之和 == 共N项的 N ----
+print("【验收1】统计自洽（六数之和 == 总项数）")
 bad1 = []
 for r, text, a in rows:
     m = re.search(r"共(\d+)项：(.+)", text)
@@ -58,13 +62,19 @@ for r, text, a in rows:
         bad1.append((r, "无统计行"))
         continue
     total = int(m.group(1))
-    nums = [int(x) for x in re.findall(r"/?(\d+)", m.group(2))]
     parts = m.group(2).split("/")
-    counts = [int(p.split("负偏离")[-1] if "负偏离" in p else
-                  p.split("待确认")[-1] if "待确认" in p else
-                  p.split("匹配")[-1] if "匹配" in p else
-                  p.split("正偏离")[-1]) for p in parts]
-    if sum(counts) != total:
+    counts = []
+    for p in parts:
+        hit = None
+        for k in STAT_KEYS:
+            if p.startswith(k):
+                hit = int(p[len(k):])
+                break
+        if hit is None:
+            bad1.append((r, f"统计段『{p}』无法解析"))
+            hit = 0
+        counts.append(hit)
+    if counts and sum(counts) != total:
         bad1.append((r, f"共{total}项 但 明细合计 {sum(counts)} ({counts})"))
 if bad1:
     for r, why in bad1:
@@ -73,7 +83,7 @@ if bad1:
 else:
     print("  ✓ 全部通过")
 
-# ---- 标准2：统计行数字 == 明细实际行数 ----
+# ---- 标准2：统计行数字 == 明细实际行数（四类明细块逐一对账） ----
 print("\n【验收2】统计数字 == 明细行数")
 bad2 = []
 for r, text, a in rows:
@@ -83,18 +93,15 @@ for r, text, a in rows:
     parts = m.group(2).split("/")
     stat = {}
     for p in parts:
-        for k in ("负偏离", "待确认", "匹配", "正偏离"):
+        for k in STAT_KEYS:
             if p.startswith(k):
                 stat[k] = int(p[len(k):])
-    # 实际明细
-    neg_block = re.search(r"负偏离：\n([\s\S]*?)(?:\n\n待确认：|\Z)", text)
-    unc_block = re.search(r"待确认：\n([\s\S]*)$", text)
-    real_neg = len([l for l in (neg_block.group(1).split("\n") if neg_block else []) if l.strip()])
-    real_unc = len([l for l in (unc_block.group(1).split("\n") if unc_block else []) if l.strip()])
-    if stat.get("负偏离", 0) != real_neg:
-        bad2.append((r, f"负偏离统计{stat.get('负偏离',0)} != 明细{real_neg}"))
-    if stat.get("待确认", 0) != real_unc:
-        bad2.append((r, f"待确认统计{stat.get('待确认',0)} != 明细{real_unc}"))
+                break
+    for k in DETAIL_KEYS:
+        blk = re.search(rf"{k}：\n([\s\S]*?)(?=\n\n(?:{'|'.join(DETAIL_KEYS)})：|\Z)", text)
+        real = len([l for l in (blk.group(1).split("\n") if blk else []) if l.strip()])
+        if stat.get(k, 0) != real:
+            bad2.append((r, f"{k}统计{stat.get(k, 0)} != 明细{real}"))
 if bad2:
     for r, why in bad2:
         print(f"  ✗ 行{r}: {why}")
@@ -107,7 +114,7 @@ print("\n【验收3】序号严格同步招标原文")
 bad3 = []
 seq_re = re.compile(r"【([^】]+)】")
 for r, text, a in rows:
-    for block in re.findall(r"(?:负偏离|待确认)：\n([\s\S]*?)(?=\n\n(?:负偏离|待确认)：|\Z)", text):
+    for block in re.findall(rf"(?:{'|'.join(DETAIL_KEYS)})：\n([\s\S]*?)(?=\n\n(?:{'|'.join(DETAIL_KEYS)})：|\Z)", text):
         for line in block.split("\n"):
             if not line.strip():
                 continue
@@ -127,24 +134,44 @@ if bad3:
 else:
     print("  ✓ 全部通过")
 
-# ---- 标准4：A 列标红行集合 == C 列部分满足行集合 ----
-print("\n【验收4】A 列标红 == C 列部分满足")
-part_rows = {r for r, text, a in rows if "部分满足" in text.split("\n")[0]}
+# ---- 标准4：A 列标红行集合 == 含负偏离/未响应/待确认明细的行 ----
+# v3.2.8：未判定是系统异常，不标红；只有负偏离/未响应/待确认（真正指向投标方）才标
+print("\n【验收4】A 列标红 == 含负偏离/未响应/待确认明细的行")
+detail_rows = set()
+for r, text, a in rows:
+    body = text.split("\n", 1)[1] if "\n" in text else ""
+    if any(f"{k}：" in body for k in ("负偏离", "未响应", "待确认")):
+        detail_rows.add(r)
 all_rows = {r for r, text, a in rows}
 red_rows = set(a_red)
-if red_rows == part_rows:
+if red_rows == detail_rows:
     print(f"  ✓ 一致（{len(red_rows)} 行）")
 else:
     print(f"  ✗ 标红 {sorted(red_rows)}")
-    print(f"    部分满足 {sorted(part_rows)}")
-    print(f"    多标 {sorted(red_rows - part_rows)} / 漏标 {sorted(part_rows - red_rows)}")
+    print(f"    应标 {sorted(detail_rows)}")
+    print(f"    多标 {sorted(red_rows - detail_rows)} / 漏标 {sorted(detail_rows - red_rows)}")
     fails.append("验收4 标红一致")
+
+# ---- 标准4b：部分满足 ⇔ 存在任一明细块（负偏离/未响应/待确认/未判定） ----
+print("\n【验收4b】部分满足 ⇔ 存在明细块")
+any_detail = set()
+for r, text, a in rows:
+    body = text.split("\n", 1)[1] if "\n" in text else ""
+    if any(f"{k}：" in body for k in DETAIL_KEYS):
+        any_detail.add(r)
+part_rows = {r for r, text, a in rows if "部分满足" in text.split("\n")[0]}
+if part_rows == any_detail:
+    print(f"  ✓ 一致（{len(part_rows)} 行部分满足）")
+else:
+    print(f"  ✗ 部分满足 {sorted(part_rows)} / 有明细 {sorted(any_detail)}")
+    print(f"    多出 {sorted(part_rows - any_detail)} / 缺少 {sorted(any_detail - part_rows)}")
+    fails.append("验收4b 部分满足与明细一致")
 
 # ---- 标准5：全部满足行无明细 ----
 print("\n【验收5】全部满足行不出现明细")
 bad5 = []
 for r, text, a in rows:
-    if "全部满足" in text and ("负偏离：" in text or "待确认：" in text):
+    if "全部满足" in text and any(f"{k}：" in text for k in DETAIL_KEYS):
         bad5.append(r)
 if bad5:
     print(f"  ✗ 行{bad5} 标全部满足却有明细")

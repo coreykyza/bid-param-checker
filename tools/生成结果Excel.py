@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """把 回归验证.js 产出的 results.json 写成带格式的核验结果 Excel。
 
-- C 列写结论（首行"结论｜共N项：…"，下方只列负偏离与待确认明细）
-- A 列把负偏离/待确认条目文字标红加粗（富文本 inlineStr）
+- C 列写结论（首行"结论｜共N项：…"，下方只列负偏离、未响应、待确认、未判定明细）
+- A 列把负偏离/未响应/待确认条目文字标红加粗（富文本 inlineStr；未判定是系统异常不标）
 - 保留 A/B 原始列宽与换行
 
 用法：python3 tools/生成结果Excel.py <源xlsx> <results.json> <输出xlsx>
@@ -100,7 +100,7 @@ with zipfile.ZipFile(dst) as z:
 
 red_rows = []
 for r in results:
-    bad = [it for it in r["items"] if it["status"] in ("negative", "uncertain")]
+    bad = [it for it in r["items"] if it["status"] in ("negative", "unresponded", "uncertain")]
     if not bad:
         continue
     a_raw = src_ws.cell(r["row"], 1).value
