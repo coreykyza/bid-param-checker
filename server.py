@@ -15,6 +15,7 @@ import os
 import sys
 import mimetypes
 import threading
+import collections
 from datetime import datetime
 from pathlib import Path
 
@@ -187,6 +188,8 @@ _PROVIDER_CONC = {}      # tag -> 最大在途数
 _PROVIDER_SEM = {}       # tag -> threading.Semaphore
 _PROVIDER_STATS = {}     # tag -> {"in_flight":n,"skipped":n,"limit":n}
 _PROVIDER_COOL = {}      # tag -> 冷却截止时间戳（跨请求的短期熔断）
+_PROVIDER_FAILS = {}     # tag -> 连续失败次数（冷却指数退避用，成功即清零）
+_ROUTE_ERRORS = collections.deque(maxlen=12)   # 最近路由失败留痕（/health 可查）
 _PROVIDER_LOCK = threading.Lock()
 
 
@@ -202,14 +205,42 @@ def _provider_cooldown(tag):
     return False
 
 
-def _provider_start_cooldown(tag):
+def _provider_start_cooldown(tag, reason=""):
+    """失败后进入冷却。连续失败按 2 倍指数退避（60→120→240…上限 1800s），
+    成功一次即清零。目的：某条链路在服务器上长期不通时（实测 ECS→TokenFuture
+    在国内出口上很不稳定），不要每 60 秒就白试一次、每次拖慢 10-40 秒。"""
     env_key = f"LLM_{tag.upper()}_COOLDOWN_SEC" if tag else "LLM_COOLDOWN_SEC"
     try:
-        sec = int(_cfg(env_key, default="60"))
+        base = int(_cfg(env_key, default="60"))
     except ValueError:
-        sec = 60
-    _PROVIDER_COOL[tag] = time.time() + max(0, sec)
+        base = 60
+    fails = _PROVIDER_FAILS.get(tag, 0) + 1
+    _PROVIDER_FAILS[tag] = fails
+    try:
+        cap = int(_cfg("LLM_COOLDOWN_MAX_SEC", default="1800"))
+    except ValueError:
+        cap = 1800
+    sec = min(max(0, base) * (2 ** min(fails - 1, 6)), cap)
+    _PROVIDER_COOL[tag] = time.time() + sec
     return sec
+
+
+def _provider_on_success(tag):
+    """成功一次 → 连续失败计数清零（下次失败重新从 base 开始）。"""
+    _PROVIDER_FAILS.pop(tag, None)
+
+
+def _record_route_error(entry, code, detail):
+    """把最近的路由失败留痕，供 /health 远程诊断（不用连服务器看日志）。"""
+    try:
+        _ROUTE_ERRORS.appendleft({
+            "ts": datetime.now().strftime("%H:%M:%S"),
+            "model": entry,
+            "code": code,
+            "detail": str(detail)[:180],
+        })
+    except Exception:
+        pass
 
 
 def _provider_limit(tag):
@@ -457,6 +488,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # 处于冷却中的 provider（上游刚回过并发限流，暂不尝试）
                 "provider_cooldown": {k or "main": round(v - time.time(), 1)
                                       for k, v in _PROVIDER_COOL.items() if v > time.time()},
+                # 连续失败次数（冷却指数退避的依据；成功即清零）
+                "provider_fail_counts": {k or "main": v for k, v in _PROVIDER_FAILS.items()},
+                # 最近 12 条路由失败（远程诊断用，不用连服务器看日志）
+                "last_route_errors": list(_ROUTE_ERRORS),
             })
             return
         if self.path.startswith("/api/admin/clear-dead"):
@@ -576,11 +611,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     with urllib.request.urlopen(req, timeout=130, context=_SSL_CTX) as resp:
                         result = json.loads(resp.read().decode("utf-8"))
+                        _provider_on_success(ptag)   # 成功后清零该 provider 的连续失败计数
                         self._json(200, result)
                         return
                 except urllib.error.HTTPError as e:
                     detail = e.read().decode("utf-8", "ignore")[:500]
                     last_error = (e.code, detail)
+                    _record_route_error(entry, e.code, detail)
                     low = detail.lower()
                     quota_gone = any(k in low for k in (
                         "quota", "insufficient", "balance", "exhausted", "expired",
@@ -604,6 +641,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         # 瞬时并发限流 / RPM 限制：只在本轮跳过，绝不写持久黑名单。
                         # 下一轮请求仍从池首位（tf）开始尝试。
                         sys.stderr.write(f"[route] {entry} 瞬时 429 限流，本轮跳过（不拉黑）\n")
+                        if ptag:   # 非主 provider 的 429 也计入冷却，避免每轮都撞
+                            _provider_start_cooldown(ptag)
                         continue
                     if e.code == 429 or (e.code in (401, 403) and (quota_gone or never_on)):
                         _mark_dead(entry, f"HTTP {e.code}: {detail}")
@@ -611,12 +650,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         continue
                     # 其它上游错误（5xx 等）：同样跳过该模型，不让单次故障拖垮整轮
                     sys.stderr.write(f"[route] {entry} 上游 HTTP {e.code}，切下一个模型\n")
+                    if ptag:   # 非主 provider 的 5xx 计入冷却退避
+                        _provider_start_cooldown(ptag)
                     continue
                 except Exception as e:
                     # 连接级故障（证书链 / DNS / 超时 / 连接重置）同样跳过当前模型，
                     # 继续尝试池内下一个；不写持久黑名单，故障恢复后自动回到高优先级。
                     last_error = (502, str(e))
+                    _record_route_error(entry, "CONN", str(e))
                     sys.stderr.write(f"[route] {entry} 连接失败，切下一个模型: {e}\n")
+                    # 非主 provider 的链路故障 → 指数退避冷却（实测 ECS→TokenFuture
+                    # 在国内出口上很不稳定，不退避就会每次都白等十几秒）
+                    if ptag:
+                        cool = _provider_start_cooldown(ptag)
+                        sys.stderr.write(f"[route] provider[{ptag}] 冷却 {cool}s（连续失败退避）\n")
                     continue
             finally:
                 _provider_release(ptag)
