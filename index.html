@@ -391,6 +391,19 @@ function buildItemStates(p,g){
         note='';
       }
     }
+    // 1.4) 【matched 复核】模型说匹配、但 B 里的容量类数值明显低于 A 的阈值 → 改判负偏离。
+    //   背景：模型对"RAID1 可用容量"这类需要换算的场景会偶发返回 matched 且理由为空
+    //   （实测某模型 5 次里 1 次），本地若无条件采信就是漏判负偏离。
+    //   这里只做【明显低于】的单向复核（保守）：B 有唯一容量值且小于 A 阈值 → 判负偏离。
+    //   高于/等于一律不动（正偏离也可能判错，但不漏判负偏离是更重要的底线）。
+    if(status==='matched' && !note){
+      const rc=matchedCapacityRecheck(it.text, bp?bp.text:'');
+      if(rc){
+        status='negative';
+        note=rc;
+        conf=null;
+      }
+    }
     // 1.5/1.6) 文本一致兜底（v3.1）：模型没返回或只给了待确认时，本地直接判。
     //   ① A 条目原文逐字出现在 B → B 照抄招标要求 = 承诺，判匹配（实测一次跑批 82 条
     //      "AI 未返回判定"里 12 条属此类，根本不该丢给模型）；
@@ -423,22 +436,42 @@ function buildItemStates(p,g){
       note='投标参数中未找到对应内容';
       conf=conf==null?0.5:conf;
     }
-    // 6) note 与 status 方向一致性兜底。
-    //    模型常把 "响应16G" 写成 "低于要求的16"（status=positive/matched 却说低于），
-    //    这类措辞出现在 C 列会让人以为判定错了。能取到数值就按数值重写，取不到就抹掉错误措辞。
+    // 6) 数值方向复核（v3.2.9 强化：不再只在"措辞冲突"时才复核）。
+    //    起因：模型常把 "响应16G" 写成 "低于要求的16"（status=positive/matched 却说低于），
+    //    这类措辞出现在 C 列会让人以为判定错；反过来模型也会判错方向
+    //    （实测：模型把 "噪声52dB ≤ 要求55dB" 判成 negative，说"低于要求的55"——
+    //     明明是满足上限，方向正好反了）。
+    //    策略：只要【两侧数值都能取到】且【阈值方向明确】（上限/下限），
+    //    就由本地按方向重算状态与理由，模型只作参考。
+    //    取不到数值或方向不明确 → 保持模型结论，仅在措辞冲突时抹掉错误措辞。
     const badForGood=/低于|不足|少于|小于|未达到|不满足|劣于/;
     const goodForBad=/优于|高于|大于|超出|超过/;
     const dirClash=((status==='matched'||status==='positive')&&badForGood.test(noteStr))
                  ||(status==='negative'&&goodForBad.test(noteStr));
-    if(dirClash){
-      const av0=nums(it.text)[0];
-      const bv0=bp?valueForField(bp.text,fieldNameOf(it.text)):null;
-      if(av0!=null && bv0!=null){
-        const d=bv0<av0?'negative':(bv0>av0?'positive':'matched');
-        note=dirNote(d,av0,bv0,{kind:d==='matched'?'eq':(((bv0>av0)===(d==='positive'))?'min':'max')});
-        status=d; conf=null;
-      }else{
-        note='';
+    {
+      // v3.2.9：用【带单位的安全提取】，不能用裸 nums()/valueForField()——
+      //   valueForField 会把 "DDR4" 的 4 当成内存值（实测：256GB DDR4 内存 → 取到 4，
+      //   4<128 → 误判负偏离）。numericVerdict 那条路有单位/量纲保护，方向复核必须同样受保护。
+      const pair=safeThresholdPair(it.text, bp?bp.text:'');
+      if(pair){
+        const {av,bv}=pair;
+        // 阈值方向：上限（不大于/不超过/≤/最高/最多）vs 下限（不低于/≥/不少于/至少）
+        const isUpper=/[≤]|<=|不超过|不大于|不高于|最高|最多/.test(it.text);
+        const isLower=/[≥]|>=|不少于|不低于|不小于|至少/.test(it.text);
+        const dirKnown=(isUpper!==isLower);   // 恰好一个方向才算明确（两者都有=多阈值，不裁决）
+        if(dirKnown){
+          let d;
+          if(isUpper)  d = bv>av?'negative':'matched';              // 上限：B 越小越好，小于阈值=满足
+          else         d = bv<av?'negative':(bv>av?'positive':'matched');  // 下限：B 越大越好
+          if(d!==status || dirClash){
+            note=dirNote(d,av,bv,{kind:isUpper?'max':'min'});
+            status=d; conf=null;
+          }
+        }else if(dirClash){
+          note='';   // 方向不明确 → 只抹掉错误措辞，保留模型结论
+        }
+      }else if(dirClash){
+        note='';     // 取不到安全数值 → 只抹掉错误措辞，保留模型结论
       }
     }
     // 无模型输入且本地判不出 → pending（交给 AI）；有模型输入但状态非法 → uncertain
@@ -473,6 +506,10 @@ function isBareValue(t){ return /^\s*\d+(?:\.\d+)?\s*[\u4e00-\u9fa5A-Za-z%\/]{0,
 function getFieldAlias(){ return {
   '内存':['内存','memory','ram','ddr','运存'],
   '硬盘':['硬盘','存储容量','固态','ssd','rom','emmc','存储空间','闪存'],
+  // v3.2.9：招标常写"系统盘/数据盘/系统磁盘"，投标写"固态硬盘/SSD"——
+  // 缺别名会让字段定位失败 → 本地放弃裁决 → 模型偶发 matched 就被采信（漏判负偏离）。
+  '系统盘':['系统盘','系统磁盘','数据盘','硬盘','存储容量','固态','ssd','rom','emmc','存储空间','闪存'],
+  '数据盘':['数据盘','系统盘','系统磁盘','硬盘','存储容量','固态','ssd','存储空间','闪存'],
   '存储容量':['存储容量','硬盘','固态','ssd','rom','emmc','存储空间'],
   '存储':['存储容量','硬盘','固态','ssd','rom','emmc'],
   '分辨率':['分辨率','resolution'],
@@ -659,14 +696,121 @@ function valueWithUnitForField(text,field,allowWhole){
 // 否则 "CPU：Intel I7 8700，内存：16GB DDR4，硬盘：120G固态" 会把型号 i7 的 7
 // 当成内存/硬盘响应值，产出"响应7，低于要求的16"这种误判（截图1的真实 bug）。
 // 多阈值条目仍不裁决（如"积木种类≥90种，积木数量≥900块"），交给模型逐项判。
+// ===== 保守回退：从 B 全文里提取"唯一"的容量类数值（v3.2.9）=====
+// 用途：字段名定位失败时（如 A 说"系统盘"、B 只说"配置16GB内存"），
+//   若 B 全文只有一个带单位的容量值，就用它做保守裁决。
+// 关键约束（宁可不裁决，也绝不瞎判）：
+//   ① 必须带单位且单位在库里、量纲为 storage/memory；
+//   ② 必须只有一个候选值——多个候选时交给模型；
+//   ③ 排除数量词（2块/2条/2个…）——那是件数不是容量；
+//   ④ RAID/镜像/条带等会改变可用容量的表述 → 一律交模型（本地算不出镜像后容量）。
+function countWords(){ return new Set(['块','条','个','台','套','只','张','片','组','件','份','颗','根','支','把','部','面','枚','盒','包']); }
+function uniqueCapacityValues(bText){
+  const t=String(bText||'');
+  if(!t) return [];
+  const out=[];
+  const seen=new Set();
+  // 用与 valueWithUnitForField 相同的单位截取逻辑（最长已知别名前缀）：
+  // "960GB SSD固态" 取 GB 而非 SSD；"2块480GB" 的"块"不在单位表里会被忽略。
+  const re=/(\d+(?:\.\d+)?)\s*([^\d\s,，。；;：:、（）()\[\]【】]{0,8})/g;
+  let m;
+  while((m=re.exec(t))!==null){
+    const pu=parseNumUnit(m[0]);
+    if(!pu) continue;
+    const unit=String(pu.unit||'').trim();
+    if(!unit||countWords().has(unit)) continue;
+    const tbl=unitFactor(unit);
+    if(!tbl) continue;
+    if(!['storage','memory'].includes(tbl.dim)) continue;
+    const key=unit+'|'+pu.n;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    out.push({n:pu.n,unit});
+  }
+  return out;
+}
+// 【matched 复核】v3.2.9：模型说匹配，但 B 里的唯一容量值明显低于 A 的阈值 → 判负偏离。
+// 场景：A="系统盘：配置不低于960GB SSD固态硬盘"，B="配置2块480GB SSD固态硬盘，组建RAID1"
+//   —— RAID 可用容量本地算不出（960 是阵列可用、480 是单盘），numericVerdict 放弃，
+//   但 B 里唯一带容量的数 480 仍 < 阈值 960，此时"匹配"几乎必然是模型看漏了。
+// 保守约束：
+//   ① A 必须有"不低于/≥/不少于"这类下限阈值（只看下限，不看上限）；
+//   ② B 必须只有一个容量候选值（多个 → 不复核，交给模型）；
+//   ③ 该值必须【明显】低于阈值（≤ 阈值的 90%）——边界附近的轻微差值不判，交模型；
+//   ④ RAID/镜像等场景取"单盘容量"作近似，方向保守（只会把 matched 改成 negative，不会反向）。
+function matchedCapacityRecheck(aText,bText){
+  const a=String(aText||''), b=String(bText||'');
+  if(!a||!b) return null;
+  if(!/[≥]|>=|不少于|不低于|不小于|至少/.test(a)) return null;   // 只复核下限
+  const th=valueWithUnitForField(a,fieldNameOf(a),true);
+  if(!th||!th.unit) return null;
+  const ft=unitFactor(th.unit);
+  if(!ft||!['storage','memory'].includes(ft.dim)) return null;
+  const cands=uniqueCapacityValues(b);
+  if(cands.length!==1) return null;               // 多个候选 → 不瞎判
+  const c=cands[0];
+  const fc=unitFactor(c.unit);
+  if(!fc||fc.dim!==ft.dim) return null;
+  const thBytes=th.n*ft.factor, cBytes=c.n*fc.factor;
+  // 明显低于（≤90%）才判负偏离，边界附近一律交模型
+  if(cBytes<=thBytes*0.9){
+    const f=v=>Number.isInteger(Number(v))?String(v):String(+Number(v).toFixed(2));
+    return `响应${f(c.n)}${c.unit}，低于要求的${f(th.n)}${th.unit}`;
+  }
+  return null;
+}
+// 【安全取值对】v3.2.9：取 A 的阈值与 B 的响应值，用于方向复核。
+// 必须与 numericVerdict 一样受单位/量纲保护，否则会重演"取全文第一个数字"的坑：
+//   实测 B="配置256GB DDR4内存" 时，字段名"内存"的别名先命中 "ddr" → 取到 4
+//   → 4<128 → 误判负偏离。所以这里的规则：
+//   ① 两侧都用 valueWithUnitForField（带单位解析）；
+//   ② 单位不同且不在同一量纲 → 不裁决（返回 null）；
+//   ③ 只有一侧有单位 → 不裁决。
+function safeThresholdPair(aText,bText){
+  const a=String(aText||''), b=String(bText||'');
+  if(!a||!b) return null;
+  const A=valueWithUnitForField(a, fieldNameOf(a), true);
+  const B=valueWithUnitForField(b, fieldNameOf(a), true);
+  if(!A||!B||A.n==null||B.n==null) return null;
+  if(!A.unit&&!B.unit) return {av:A.n,bv:B.n};           // 两侧都无单位 → 纯数值可比
+  if(A.unit&&B.unit){
+    if(A.unit===B.unit) return {av:A.n,bv:B.n};            // 单位完全相同 → 直接比
+    const fa=unitFactor(A.unit), fb=unitFactor(B.unit);
+    if(fa&&fb&&fa.dim===fb.dim) return {av:A.n*fa.factor, bv:B.n*fb.factor};  // 同量纲 → 换算后比
+    return null;                                            // 不同量纲 → 不裁决
+  }
+  return null;                                              // 一侧有单位一侧没有 → 不裁决
+}
 function numericVerdict(aText,bText){
   const nThresh=(aText.match(/[≥≤]|>=|<=|不少于|不低于|不小于|不超过|不大于|至少|最多/g)||[]).length;
   if(nThresh>1) return null;
   const lowM=aText.match(/[≥]|>=|不低于|不少于|不小于|至少|大于等于/);
   const highM=aText.match(/[≤]|<=|不超过|不大于|最高|最多|小于等于/);
   const field=fieldNameOf(aText);
-  const A=valueWithUnitForField(aText,field,true);
-  const B=valueWithUnitForField(bText,field,true);
+  let A=valueWithUnitForField(aText,field,true);
+  let B=valueWithUnitForField(bText,field,true);
+  // ---- 字段定位失败的保守回退（v3.2.9）----
+  // 场景：A="系统盘：配置不低于960GB SSD固态硬盘"，B="配置2块480GB SSD固态硬盘，组建RAID1"
+  //   —— B 里根本没有"系统盘"这个字段名，valueForField 返回 null → 本地放弃裁决，
+  //   于是模型偶尔返回 matched（实测 flash-ga 5 次里 1 次）就会被直接采纳 → 漏判负偏离。
+  // 回退规则【必须保守】：仅当 B 全文只有一个"带单位的数值 + A 也有同量纲单位"时才用，
+  //   且 B 中那些"数量词"（2块/2条/2个）必须排除——它们不是容量值。
+  //   多个候选值 → 宁可不裁决，交给模型。
+  if(!B && A){
+    // RAID/镜像/条带会改变可用容量 → 本地算不出，绝不在这条路径上瞎比
+    if(!/raid|镜像|条带|stripe/i.test(String(bText||''))){
+      const cand=uniqueCapacityValues(bText);
+      if(cand.length===1){
+        const bu=cand[0].unit;
+        const fa=A.unit?unitFactor(A.unit):null;
+        const fb=bu?unitFactor(bu):null;
+        if(A.unit&&bu&&fa&&fb&&fa.dim===fb.dim){
+          A={n:A.n,unit:A.unit};
+          B={n:cand[0].n,unit:bu};
+        }
+      }
+    }
+  }
   if(!A||!B) return null;
   let cmpA=A.n,cmpB=B.n,conv=null;
   const fa=A.unit?unitFactor(A.unit):null;
@@ -697,6 +841,9 @@ function dirNote(dir,av,bv,info){
   const aShow=`要求的${f(av)}${au}`;
   if(dir==='negative') return `${bShow}，${kind==='max'?'高于':'低于'}${aShow}`;
   if(dir==='positive') return `${bShow}，优于${aShow}`;
+  // v3.2.9：上限语义下 B 小于阈值是"满足"，不能写成"等于"（52≠55）。
+  //   kind==='max' 表示阈值是上限（B 越小越好），此时 bv<av 应写"优于/满足"。
+  if(kind==='max' && Number(bv)<Number(av)) return `${bShow}，优于${aShow}`;
   return `${bShow}，等于${aShow}`;
 }
 // A 条目在 B 全文中是否有任何相关内容（用于区分"找不到对应内容"与"明确不满足"）
@@ -1239,6 +1386,13 @@ $('btnVerify').addEventListener('click',async()=>{
           const reason=String(v.reason||'').trim();
           const conf=v.confidence==null?0:Number(v.confidence);
           if(!reason || conf<0.7) return;      // 无具体理由或置信度不足 → 保留初判
+          // v3.2.9：核验理由若表明"其实满足要求"，说明核验者其实【同意】原判，
+          //   只是措辞绕（实测两种形态：
+          //   ① 初判 negative、核验理由"52dB不大于55dB，满足要求"；
+          //   ② 初判 negative、核验理由"投标256GB，高于要求128GB"——说的是满足，
+          //      但只因没出现"满足"二字就被当成反对，把一条正确的负偏离降级成待确认）。
+          //   这类理由说明初判方向没错、只是数值口径有争议 → 保持原判不改状态。
+          if(/满足要求|符合要求|达标|满足.{0,6}要求|不构成.{0,4}偏离|原判正确|初判正确|(高于|优于|大于|超出|达到|不低于|不少于|不小于|不高于|不大于|不超过).{0,8}要求/.test(reason)) return;
           downgrades.push({ row: m.p.row, idx, prev: it.status, reason });
           vDown++;
         });

@@ -33,6 +33,7 @@ const NEEDED = [
   'isGroupHeading', 'isBareValue', 'getFieldAlias', 'fieldNameOf', 'valueForField',
   'getUnitTable', 'unitFactor', 'parseNumUnit', 'valueWithUnitForField',
   'numericVerdict', 'dirNote', 'hasAnyCounterpart', 'buildItemStates', 'textRescue',
+  'uniqueCapacityValues', 'countWords', 'matchedCapacityRecheck', 'safeThresholdPair',
   'itemSeqLabel', 'itemBody', 'detailLine', 'statLine', 'formatResult', 'isNeg'
 ];
 function pickFunctions(src, names) {
@@ -53,7 +54,7 @@ function pickFunctions(src, names) {
   return out;
 }
 
-const sandbox = { console, JSON, Math, Date, String, Number, Array, Object, RegExp, isNaN, parseFloat, parseInt };
+const sandbox = { console, JSON, Math, Date, String, Number, Array, Object, RegExp, isNaN, parseFloat, parseInt, Set, Map };
 vm.createContext(sandbox);
 vm.runInContext(hwSpecs, sandbox);
 vm.runInContext(hwMatcher, sandbox);
@@ -109,8 +110,8 @@ for (const tag of String(cfg('LLM_EXTRA_TAGS') || 'BAILIAN,BAILIAN_KIMI').split(
 function resolve(model) {
   let tag = '', real = model;
   if (model.includes(':')) { [tag, real] = model.split(':', 2); tag = tag.toLowerCase(); }
-  if (tag && EXTRA[tag]) return { real, ...EXTRA[tag] };
-  return { real, key: KEY, url: API, thinking: THINKING };
+  if (tag && EXTRA[tag]) return { real, tag, ...EXTRA[tag] };
+  return { real, tag, key: KEY, url: API, thinking: THINKING };
 }
 // 自动路由：与 server.py 共用同一份拉黑名单，429 自动切下一个模型
 const DEAD_FILE = path.join(ROOT, 'model_deadlist.json');
@@ -126,6 +127,25 @@ const splitPool = (raw, fallback) => {
 };
 const MODELS = splitPool(cfg('LLM_MODEL_POOL'), MODEL_NAME);
 const VERIFY_MODELS = splitPool(cfg('LLM_VERIFY_POOL'), VERIFY_MODEL);
+
+// v3.2.9：provider 并发闸（对齐 server.py）
+// TokenFuture 账号级上限约 3 路，超出的请求在上游挂 30s 才回 429 —— 那是纯浪费。
+// 本地按 provider 限在途数，抢不到槽位直接换下一个模型，绝不白等那 30 秒。
+const PROVIDER_LIMIT = { '': 6 };   // 主 provider（火山）6 路
+const PROVIDER_INFLIGHT = { '': 0 };
+function providerLimit(tag) {
+  if (PROVIDER_LIMIT[tag] === undefined) {
+    const key = `LLM_${tag.toUpperCase()}_MAX_CONCURRENCY`;
+    const def = 2;   // 附加 provider 保守取 2，实测上游约 3 路
+    PROVIDER_LIMIT[tag] = parseInt(cfg(key) || String(def), 10) || def;
+  }
+  return PROVIDER_LIMIT[tag];
+}
+function providerAcquire(tag) {
+  if (PROVIDER_INFLIGHT[tag] < providerLimit(tag)) { PROVIDER_INFLIGHT[tag]++; return true; }
+  return false;
+}
+function providerRelease(tag) { PROVIDER_INFLIGHT[tag] = Math.max(0, PROVIDER_INFLIGHT[tag] - 1); }
 const DEFAULT_URLS = {
   deepseek: 'https://api.deepseek.com/v1/chat/completions',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
@@ -137,54 +157,75 @@ console.log(`初判池：${MODELS.join(' → ')}`);
 console.log(`核验池：${VERIFY_MODELS.join(' → ')} | thinking=${THINKING || '-'} | ${API}`);
 
 // 按池顺序调用；429 自动拉黑并切下一个（与 server.py 行为一致）
+// v3.2.9：上游账号级并发限流（TokenFuture 实测约 3 路，超出后在上游挂 30s 才回 429）
+//   → 一旦撞到 concurrency_limit，本轮【跳过该 provider 的剩余全部模型】，
+//     直接落到后面的国内模型，避免每个 tf 模型各白等 30s（最坏 90s）。
 async function callWithFallback(pool, body) {
   let dead = loadDead();
   let candidates = pool.filter(m => !dead[m]);
   if (!candidates.length) { fs.writeFileSync(DEAD_FILE, '{}'); candidates = [...pool]; }
   let last = null;
+  const skipProvider = new Set();   // 本轮已被上游判定限流的 provider
   for (const entry of candidates) {
-    const { real, key, url, thinking } = resolve(entry);
+    const { real, key, url, thinking, tag } = resolve(entry);
+    if (skipProvider.has(tag)) continue;
+    // provider 并发闸：抢不到槽位立刻换下一个模型，不在上游白等 30s
+    if (!providerAcquire(tag)) {
+      console.log(`\n  ⚠ ${entry} provider[${tag || 'main'}] 并发已满(${providerLimit(tag)}路)，立即跳过`);
+      last = new Error(`provider ${tag} concurrency full`);
+      continue;
+    }
     const msg = { ...body, model: real };
     if (thinking === 'enabled' || thinking === 'disabled') msg.thinking = { type: thinking };
     else if (thinking === 'kimi') { msg.temperature = 0.6; msg.thinking = { type: 'disabled' }; }
     else if (thinking === 'qwen-no-think') msg.enable_thinking = false;
     try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-        body: JSON.stringify(msg),
-        signal: AbortSignal.timeout(120000)
-      });
-      if (!resp.ok) {
-        const detail = (await resp.text()).slice(0, 300);
-        const low = detail.toLowerCase();
-        const quotaGone = /quota|insufficient|balance|exhausted|expired|out of credit|no credit|额度|余额|欠费|用尽|已用完/.test(low);
-        if (resp.status === 429 && !quotaGone) {
-          // 纯并发限流：本轮跳过，不拉黑（对齐 server.py v3.2.3）
-          console.log(`\n  ⚠ ${entry} 瞬时 429 限流，本轮跳过（不拉黑）`);
-          last = new Error(`HTTP 429 ${detail}`);
-          continue;
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+          body: JSON.stringify(msg),
+          signal: AbortSignal.timeout(120000)
+        });
+        if (!resp.ok) {
+          const detail = (await resp.text()).slice(0, 300);
+          const low = detail.toLowerCase();
+          const quotaGone = /quota|insufficient|balance|exhausted|expired|out of credit|no credit|额度|余额|欠费|用尽|已用完|setlimitexceeded|set usage limit|has been paused/i.test(low);
+          if (resp.status === 429 && !quotaGone) {
+            // 纯并发限流：本轮跳过，不拉黑（对齐 server.py v3.2.3）
+            if (/concurrency_limit|concurrency limit/i.test(low)) {
+              // 上游账号级并发限流：跳过该 provider 余下全部模型，直接落到下一个 provider
+              skipProvider.add(tag);
+              console.log(`\n  ⚠ ${entry} 上游并发限流(${tag || 'main'})，跳过该 provider 余下模型`);
+            } else {
+              console.log(`\n  ⚠ ${entry} 瞬时 429 限流，本轮跳过（不拉黑）`);
+            }
+            last = new Error(`HTTP 429 ${detail}`);
+            continue;
+          }
+          if (resp.status === 429 || (resp.status === 403 && quotaGone)) {
+            markDead(entry, `HTTP ${resp.status}: ${detail}`);
+            console.log(`\n  ⚠ ${entry} 额度耗尽，自动切换下一个`);
+            last = new Error(`HTTP ${resp.status} ${detail}`);
+            continue;
+          }
+          if (resp.status === 404 || resp.status === 401) {
+            // 模型不存在/鉴权失败：拉黑后切下一个（对齐 server.py v3.2.3）
+            markDead(entry, `HTTP ${resp.status}: ${detail}`);
+            console.log(`\n  ⚠ ${entry} 不可用（HTTP ${resp.status}），自动切换下一个`);
+            last = new Error(`HTTP ${resp.status} ${detail}`);
+            continue;
+          }
+          throw new Error('HTTP ' + resp.status + ' ' + detail);
         }
-        if (resp.status === 429 || (resp.status === 403 && quotaGone)) {
-          markDead(entry, `HTTP ${resp.status}: ${detail}`);
-          console.log(`\n  ⚠ ${entry} 额度耗尽，自动切换下一个`);
-          last = new Error(`HTTP ${resp.status} ${detail}`);
-          continue;
-        }
-        if (resp.status === 404 || resp.status === 401) {
-          // 模型不存在/鉴权失败：拉黑后切下一个（对齐 server.py v3.2.3）
-          markDead(entry, `HTTP ${resp.status}: ${detail}`);
-          console.log(`\n  ⚠ ${entry} 不可用（HTTP ${resp.status}），自动切换下一个`);
-          last = new Error(`HTTP ${resp.status} ${detail}`);
-          continue;
-        }
-        throw new Error('HTTP ' + resp.status + ' ' + detail);
-      }
-      const data = await resp.json();
-      const content = data.choices[0].message.content;
-      if (!content || !String(content).trim()) throw new Error(`EMPTY_CONTENT ${entry} reasoning可能吃光max_tokens`);
-      return content;
-    } catch (e) { last = e; if (String(e.message).startsWith('HTTP ')) throw e; }
+        const data = await resp.json();
+        const content = data.choices[0].message.content;
+        if (!content || !String(content).trim()) throw new Error(`EMPTY_CONTENT ${entry} reasoning可能吃光max_tokens`);
+        return content;
+      } catch (e) { last = e; if (String(e.message).startsWith('HTTP ')) throw e; }
+    } finally {
+      providerRelease(tag);
+    }
   }
   throw last || new Error('模型池全部不可用');
 }
@@ -394,6 +435,8 @@ async function verify(rows) {
               const reason = String(v.reason || '').trim();
               const conf = v.confidence == null ? 0 : Number(v.confidence);
               if (!reason || conf < 0.7) return;      // 严格门槛
+              // v3.2.9：核验理由表明"其实满足要求"→ 核验者其实同意原判，不该降级
+              if (/满足要求|符合要求|达标|满足.*要求|不构成.*偏离|原判正确|初判正确/.test(reason)) return;
               const prev = it.status;
               it.status = 'uncertain';
               it.note = `经核验转待确认（原${prev === 'negative' ? '负偏离' : '正偏离'}）：${reason.slice(0, 25)}`;

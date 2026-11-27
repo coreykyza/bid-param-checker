@@ -175,6 +175,131 @@ def _resolve(model):
     return real, API_KEY, API_URL, THINKING
 
 
+# ---- 供应商并发闸（v3.2.9）----
+# TokenFuture 这类中转商有【账号级】并发上限（实测约 3 路），超出的请求不是在本地排队，
+# 而是先挂在上游等约 30 秒、等到超时就返回 429 gateway_concurrency_limit。
+# 后果：一轮 6 并发里若有 3 路撞限，每路要白等 30s 才切下一个模型，
+#      池里有 3 个 tf 模型时最坏 3×30=90s 才轮得到后面的国内模型——这才是"国外模型特别慢"的真凶。
+# 对策：本地按 provider 限制在途请求数（信号量），抢不到槽位就【立刻】跳过该 provider，
+#      直接落到下一个模型，绝不把 30 秒的等待留给用户。
+#      排队改为本地有界排队（默认等 0 秒=直接跳过；可调）。
+_PROVIDER_CONC = {}      # tag -> 最大在途数
+_PROVIDER_SEM = {}       # tag -> threading.Semaphore
+_PROVIDER_STATS = {}     # tag -> {"in_flight":n,"skipped":n,"limit":n}
+_PROVIDER_COOL = {}      # tag -> 冷却截止时间戳（跨请求的短期熔断）
+_PROVIDER_LOCK = threading.Lock()
+
+
+def _provider_cooldown(tag):
+    """某 provider 是否处于冷却中（上游刚回过并发限流）。
+    冷却期内的新请求【直接跳过】该 provider，不再去撞那 30 秒的等待。
+    冷却时长默认 60 秒，由 LLM_<TAG>_COOLDOWN_SEC 调整。"""
+    until = _PROVIDER_COOL.get(tag, 0)
+    if until > time.time():
+        return True
+    if until:
+        _PROVIDER_COOL.pop(tag, None)
+    return False
+
+
+def _provider_start_cooldown(tag):
+    env_key = f"LLM_{tag.upper()}_COOLDOWN_SEC" if tag else "LLM_COOLDOWN_SEC"
+    try:
+        sec = int(_cfg(env_key, default="60"))
+    except ValueError:
+        sec = 60
+    _PROVIDER_COOL[tag] = time.time() + max(0, sec)
+    return sec
+
+
+def _provider_limit(tag):
+    """某 provider 的在途上限。tag 为空表示主 provider（火山）。"""
+    if tag not in _PROVIDER_CONC:
+        with _PROVIDER_LOCK:
+            if tag not in _PROVIDER_CONC:
+                env_key = f"LLM_{tag.upper()}_MAX_CONCURRENCY" if tag else "LLM_MAX_CONCURRENCY"
+                # 默认值：主 provider 6 路（实测火山 6 并发全过）；附加 provider 2 路
+                # （实测 TokenFuture 账号级上限约 3 路，且是"排队型"——超出的请求会先
+                #  在上游挂 30 秒再回 429。取 2 路留足余量，从根上不触发那条 30 秒等待）。
+                default = str(6 if not tag else 2)
+                try:
+                    lim = int(_cfg(env_key, default=default))
+                except ValueError:
+                    lim = int(default)
+                lim = max(1, lim)
+                _PROVIDER_CONC[tag] = lim
+                _PROVIDER_SEM[tag] = threading.BoundedSemaphore(lim)
+    return _PROVIDER_CONC[tag], _PROVIDER_SEM[tag]
+
+
+def _provider_wait(tag):
+    """抢不到槽位时，本地最多等多少秒再放弃该 provider。
+    等 = 保质量（这批仍由该 provider 判，只是排队）；
+    不等/等太久 = 保速度（立刻降级到下一个模型，绝不在上游白等 30s）。
+    附加 provider（tf）默认只等 8 秒：tf 单发本身就要 10-40s，等超过这个量级
+    不如直接降级到国内模型（1-2s 就能返回）。"""
+    env_key = f"LLM_{tag.upper()}_QUEUE_WAIT" if tag else "LLM_QUEUE_WAIT"
+    default = "8" if tag else "0"
+    try:
+        return max(0.0, float(_cfg(env_key, default=default)))
+    except ValueError:
+        return float(default)
+
+
+def _provider_try_acquire(tag):
+    """抢 provider 槽位。抢不到就本地有界排队；等不到返回 False（换下一个模型）。"""
+    _, sem = _provider_limit(tag)
+    ok = sem.acquire(timeout=_provider_wait(tag))
+    with _PROVIDER_LOCK:
+        st = _PROVIDER_STATS.setdefault(tag, {"in_flight": 0, "skipped": 0, "limit": 0})
+        st["limit"] = _PROVIDER_CONC[tag]
+        if ok:
+            st["in_flight"] += 1
+        else:
+            st["skipped"] += 1
+    return ok
+
+
+def _provider_release(tag):
+    _, sem = _provider_limit(tag)
+    try:
+        sem.release()
+    except ValueError:
+        pass
+    with _PROVIDER_LOCK:
+        st = _PROVIDER_STATS.setdefault(tag, {"in_flight": 0, "skipped": 0, "limit": 0})
+        st["in_flight"] = max(0, st["in_flight"] - 1)
+
+
+def _provider_tag(entry):
+    """池条目 → provider tag（'tf:' → 'tf'；无前缀 → ''主 provider）。"""
+    if ":" in entry:
+        return entry.split(":", 1)[0].lower()
+    return ""
+
+
+# 本次请求内已被上游判定为限流的 provider：余下同 provider 的模型一律跳过，
+# 避免"每个 tf 模型各白等 30s"这种最坏 90s 的叠加。
+_SKIP_PROVIDERS = threading.local()
+
+
+def _skip_provider_until(tag):
+    st = getattr(_SKIP_PROVIDERS, "tags", None)
+    if st is None:
+        st = set()
+        _SKIP_PROVIDERS.tags = st
+    st.add(tag)
+
+
+def _provider_skipped(tag):
+    st = getattr(_SKIP_PROVIDERS, "tags", None)
+    return bool(st and tag in st)
+
+
+def _provider_skip_reset():
+    _SKIP_PROVIDERS.tags = set()
+
+
 # AI 核验专家用独立模型（异构盲核，避免同一个模型复核自己）。未配置则回退到初判模型。
 VERIFY_MODEL = _cfg("LLM_VERIFY_MODEL", default="") or MODEL
 
@@ -322,6 +447,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "dead_models": list(dead_now.keys()),
                 "dead_details": dead_now,
                 "dead_ttl_sec": DEAD_TTL_SEC,
+                # provider 并发闸状态：在途/上限/被跳过次数（诊断 tf 限流用）
+                "provider_gates": {k or "main": dict(v) for k, v in _PROVIDER_STATS.items()},
+                # 各 provider 的并发上限与排队等待（秒）
+                "provider_gate_config": {
+                    (k or "main"): {"max_concurrency": _provider_limit(k)[0], "queue_wait_sec": _provider_wait(k)}
+                    for k in list(_PROVIDER_STATS.keys()) or ["tf", ""]
+                },
+                # 处于冷却中的 provider（上游刚回过并发限流，暂不尝试）
+                "provider_cooldown": {k or "main": round(v - time.time(), 1)
+                                      for k, v in _PROVIDER_COOL.items() if v > time.time()},
             })
             return
         if self.path.startswith("/api/admin/clear-dead"):
@@ -400,66 +535,91 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write("[route] 池内模型全部拉黑，清空黑名单重试一轮\n")
             candidates = list(pool)
         last_error = None
+        _provider_skip_reset()
         for entry in candidates:
             real_model, use_key, use_url, use_thinking = _resolve(entry)
-            payload = {
-                "model": real_model,
-                "messages": messages,
-                "temperature": 0.1,
-                "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
-                "response_format": {"type": "json_object"},
-            }
-            # 关思考：DeepSeek V4 / 百炼部分模型默认开思考会吃光 max_tokens 导致空返回。
-            # kimi 系列 temperature 必须是 0.6（见 _resolve 对应 provider 配置）。
-            if use_thinking in ("enabled", "disabled"):
-                payload["thinking"] = {"type": use_thinking}
-            elif use_thinking == "kimi":
-                payload["temperature"] = 0.6
-                payload["thinking"] = {"type": "disabled"}
-            elif use_thinking == "qwen-no-think":
-                payload["enable_thinking"] = False
-            req = urllib.request.Request(
-                use_url,
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers={
-                    "Authorization": f"Bearer {use_key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
+            # ---- provider 并发闸：抢不到槽位立刻换下一个模型，绝不在上游白等 30s ----
+            ptag = _provider_tag(entry)
+            if _provider_skipped(ptag):
+                continue
+            if _provider_cooldown(ptag):
+                continue
+            if not _provider_try_acquire(ptag):
+                sys.stderr.write(f"[route] {entry} provider[{ptag or 'main'}] 并发已满({_provider_limit(ptag)[0]}路)，立即跳过不等上游\n")
+                continue
             try:
-                with urllib.request.urlopen(req, timeout=130, context=_SSL_CTX) as resp:
-                    result = json.loads(resp.read().decode("utf-8"))
-                    self._json(200, result)
-                    return
-            except urllib.error.HTTPError as e:
-                detail = e.read().decode("utf-8", "ignore")[:500]
-                last_error = (e.code, detail)
-                low = detail.lower()
-                quota_gone = any(k in low for k in (
-                    "quota", "insufficient", "balance", "exhausted", "expired",
-                    "out of credit", "no credit", "额度", "余额", "欠费", "用尽", "已用完"))
-                never_on = any(k in low for k in (
-                    "not activated", "not enabled", "model not found", "does not exist",
-                    "未开通", "未启用", "模型不存在"))
-                if e.code == 429 and not quota_gone:
-                    # 瞬时并发限流 / RPM 限制：只在本轮跳过，绝不写持久黑名单。
-                    # 下一轮请求仍从池首位（tf）开始尝试。
-                    sys.stderr.write(f"[route] {entry} 瞬时 429 限流，本轮跳过（不拉黑）\n")
+                payload = {
+                    "model": real_model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": int(_cfg("LLM_MAX_TOKENS", default="8192")),
+                    "response_format": {"type": "json_object"},
+                }
+                # 关思考：DeepSeek V4 / 百炼部分模型默认开思考会吃光 max_tokens 导致空返回。
+                # kimi 系列 temperature 必须是 0.6（见 _resolve 对应 provider 配置）。
+                if use_thinking in ("enabled", "disabled"):
+                    payload["thinking"] = {"type": use_thinking}
+                elif use_thinking == "kimi":
+                    payload["temperature"] = 0.6
+                    payload["thinking"] = {"type": "disabled"}
+                elif use_thinking == "qwen-no-think":
+                    payload["enable_thinking"] = False
+                req = urllib.request.Request(
+                    use_url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {use_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=130, context=_SSL_CTX) as resp:
+                        result = json.loads(resp.read().decode("utf-8"))
+                        self._json(200, result)
+                        return
+                except urllib.error.HTTPError as e:
+                    detail = e.read().decode("utf-8", "ignore")[:500]
+                    last_error = (e.code, detail)
+                    low = detail.lower()
+                    quota_gone = any(k in low for k in (
+                        "quota", "insufficient", "balance", "exhausted", "expired",
+                        "out of credit", "no credit", "额度", "余额", "欠费", "用尽", "已用完",
+                        # 火山 SetLimitExceeded：账号对该模型达到自设用量上限、模型被暂停。
+                        # message 含 "has reached the set usage limit ... model service has been paused"，
+                        # 不加这两个词会被误判成"瞬时限流"→ 每轮都白撞一次（表现为 AI 未返回）。
+                        "setlimitexceeded", "set usage limit", "has been paused", "model service has been paused"))
+                    never_on = any(k in low for k in (
+                        "not activated", "not enabled", "model not found", "does not exist",
+                        "未开通", "未启用", "模型不存在"))
+                    # 上游账号级并发限流（TokenFuture 等）：不是额度问题，也不该让本地再等 30s。
+                    # 直接跳过该 provider 的剩余模型，本轮直接落到后面的国内模型。
+                    if e.code == 429 and ("concurrency_limit" in low or "concurrency limit" in low):
+                        cool = _provider_start_cooldown(ptag)
+                        sys.stderr.write(f"[route] {entry} 上游并发限流({ptag or 'main'})，跳过该 provider 余下模型并冷却 {cool}s\n")
+                        # 标记：同 provider 的后续条目一并跳过，避免每个都白等 30s
+                        _skip_provider_until(ptag)
+                        continue
+                    if e.code == 429 and not quota_gone:
+                        # 瞬时并发限流 / RPM 限制：只在本轮跳过，绝不写持久黑名单。
+                        # 下一轮请求仍从池首位（tf）开始尝试。
+                        sys.stderr.write(f"[route] {entry} 瞬时 429 限流，本轮跳过（不拉黑）\n")
+                        continue
+                    if e.code == 429 or (e.code in (401, 403) and (quota_gone or never_on)):
+                        _mark_dead(entry, f"HTTP {e.code}: {detail}")
+                        sys.stderr.write(f"[route] {entry} 额度/权限不可用，拉黑 {DEAD_TTL_SEC}s 后自动复活\n")
+                        continue
+                    # 其它上游错误（5xx 等）：同样跳过该模型，不让单次故障拖垮整轮
+                    sys.stderr.write(f"[route] {entry} 上游 HTTP {e.code}，切下一个模型\n")
                     continue
-                if e.code == 429 or (e.code in (401, 403) and (quota_gone or never_on)):
-                    _mark_dead(entry, f"HTTP {e.code}: {detail}")
-                    sys.stderr.write(f"[route] {entry} 额度/权限不可用，拉黑 {DEAD_TTL_SEC}s 后自动复活\n")
+                except Exception as e:
+                    # 连接级故障（证书链 / DNS / 超时 / 连接重置）同样跳过当前模型，
+                    # 继续尝试池内下一个；不写持久黑名单，故障恢复后自动回到高优先级。
+                    last_error = (502, str(e))
+                    sys.stderr.write(f"[route] {entry} 连接失败，切下一个模型: {e}\n")
                     continue
-                # 其它上游错误（5xx 等）：同样跳过该模型，不让单次故障拖垮整轮
-                sys.stderr.write(f"[route] {entry} 上游 HTTP {e.code}，切下一个模型\n")
-                continue
-            except Exception as e:
-                # 连接级故障（证书链 / DNS / 超时 / 连接重置）同样跳过当前模型，
-                # 继续尝试池内下一个；不写持久黑名单，故障恢复后自动回到高优先级。
-                last_error = (502, str(e))
-                sys.stderr.write(f"[route] {entry} 连接失败，切下一个模型: {e}\n")
-                continue
+            finally:
+                _provider_release(ptag)
         status = last_error[0] if last_error else 429
         self._json(status, {
             "error": "ALL_MODELS_EXHAUSTED",
